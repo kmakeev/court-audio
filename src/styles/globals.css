@@ -1,0 +1,83 @@
+/*
+ * Базовые стили «Аудиопротокол» на дизайн-системе PravoUI.
+ * Токены — в `tokens.css` (не задавать CSS-переменные вручную). Здесь:
+ *   1) подключение фирменных шрифтов (Lora / Inter / JetBrains Mono);
+ *   2) глобальный сброс и фон «бумаги»;
+ *   3) утилиты тёмной полосы (шапка) — перенесено из `.design-sync/ds-extra.css`;
+ *   4) классы компонентов PravoUI, не покрытые inline-стилями (`.num`, empty-state).
+ */
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import './tokens.css';
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--body);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Моноширинный класс PravoUI: номера дел, статей, технические значения. */
+.num {
+  font-family: var(--mono);
+}
+
+/* ── Тёмная полоса (шапка) — из `.design-sync/ds-extra.css` ──────────────── */
+.bg-dark {
+  background-color: var(--dark);
+}
+.text-on-dark {
+  color: var(--on-dark);
+}
+.text-on-dark-soft {
+  color: var(--on-dark-soft);
+}
+.text-on-dark-soft:hover {
+  color: var(--on-dark);
+}
+
+/* ── Единый empty-state (components/design/EmptyState.tsx) ───────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  padding: 40px 32px;
+  background: var(--paper-elev);
+  border: 1px solid var(--hairline);
+}
+.empty-state--compact {
+  padding: 24px 20px;
+  gap: 8px;
+}
+.empty-state__title {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 18px;
+  color: var(--ink);
+  margin: 0;
+}
+.empty-state--compact .empty-state__title {
+  font-size: 15px;
+}
+.empty-state__text {
+  font-family: var(--serif);
+  font-size: 14px;
+  color: var(--body);
+  line-height: 1.6;
+  max-width: 460px;
+  margin: 0;
+}

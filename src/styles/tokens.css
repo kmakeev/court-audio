@@ -1,0 +1,40 @@
+:root {
+  /* Paper / canvas */
+  --paper:        #f4ede0;
+  --paper-soft:   #ede4d2;
+  --paper-strong: #e4d8bf;
+  --paper-elev:   #faf6ec;
+
+  /* Ink */
+  --ink:          #1a1814;
+  --ink-soft:     #2c2922;
+  --body:         #44403a;
+  --muted:        #645e53; /* a11y: затемнён с #7a7468 (3.99→~5.1:1 на --paper) */
+  --muted-soft:   #6a6356; /* a11y: затемнён с #9c9586 (2.56→~5.1:1 на --paper) */
+
+  /* Hairlines */
+  --hairline:     #d6cab1;
+  --hairline-soft:#e2d8c2;
+
+  /* Accent — oxblood */
+  --accent:       #8a2a2a;
+  --accent-deep:  #5e1c1c;
+  --accent-soft:  #b65555;
+  --accent-tint:  #efd9d4;
+
+  /* Secondary accents */
+  --gold:         #a4842b;
+  --gold-tint:    #ecdfb4;
+  --green:        #4a6b3a;
+
+  /* Dark surface */
+  --dark:         #1f1c16;
+  --dark-soft:    #2a2620;
+  --on-dark:      #f4ede0;
+  --on-dark-soft: #b8ad94;
+
+  /* Type */
+  --serif: "Lora", "Source Serif Pro", Georgia, serif;
+  --sans:  "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono:  "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+}

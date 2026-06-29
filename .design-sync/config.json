@@ -1,0 +1,12 @@
+{
+  "globalName": "PravoUI",
+  "role": "consumer",
+  "note": "court-audio переиспользует подмножество PravoUI как вендоренный снапшот (src/design + src/styles + public/icons.svg). Источник истины — ex_system_front. Регламент и список файлов — SOURCE.md.",
+  "source": {
+    "repo": "ex_system_front",
+    "componentsDir": "src/components/design",
+    "tokens": "src/styles/tokens.css",
+    "sprite": "ds-bundle/icons.svg",
+    "extraCss": ".design-sync/ds-extra.css"
+  }
+}

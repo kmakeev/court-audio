@@ -8,6 +8,11 @@ dist/
 dist-ssr/
 *.local
 
+# Артефакты TS-сборки (tsc -b)
+*.tsbuildinfo
+/vite.config.js
+/vite.config.d.ts
+
 # Сборки и дистрибутивы
 /src-tauri/gen/
 *.deb

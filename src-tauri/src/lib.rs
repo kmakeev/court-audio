@@ -1,0 +1,26 @@
+//! Ядро захвата «Аудиопротокол».
+//!
+//! Структура модулей повторяет карту из `CLAUDE.md`/`promts/`: каждый модуль —
+//! заготовка профильного этапа (01–06). На этапе 00 рабочей логики нет — только
+//! каркас, модель [`settings::Settings`] и IPC-команды настроек.
+
+pub mod audio;
+pub mod integrity;
+pub mod ipc;
+pub mod recorder;
+pub mod reliability;
+pub mod settings;
+pub mod store;
+pub mod sync;
+
+/// Точка сборки Tauri-приложения. Регистрирует IPC-команды и запускает окно.
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            ipc::get_settings,
+            ipc::save_settings
+        ])
+        .run(tauri::generate_context!())
+        .expect("ошибка запуска приложения «Аудиопротокол»");
+}
