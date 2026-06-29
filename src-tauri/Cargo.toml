@@ -19,16 +19,23 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# ── Этап 01 (audio_core): захват звука и WAV-кодирование ─────────────────────
+# Ресемпл частоты в v1 не делаем (пишем на нативной частоте устройства),
+# поэтому rubato не подключаем — см. promts/01_audio_core.md, deliverable 3.
+cpal = "0.15"
+hound = "3.5"
+
 # ── Крейты профильных этапов (подключаются по мере реализации) ───────────────
-# Этап 01 (audio_core): захват звука и WAV-кодирование
-# cpal = "0.15"
-# hound = "3"
 # Этап 03 (store_integrity): SQLite-манифест и SHA-256 хеш-цепочка
 # rusqlite = { version = "0.32", features = ["bundled"] }
 # sha2 = "0.10"
 # Этап 06 (sync_agent): асинхронная возобновляемая выгрузка в ex_system
 # tokio = { version = "1", features = ["full"] }
 # reqwest = { version = "0.12", features = ["json", "stream"] }
+
+[dev-dependencies]
+# Временный каталог для интеграционного теста конвейера записи.
+tempfile = "3"
 
 [features]
 # Параметр по умолчанию для production-сборок Tauri.

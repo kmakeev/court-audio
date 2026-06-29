@@ -65,6 +65,11 @@ pub struct AudioSettings {
     pub bit_depth: u16,
     pub channels: u16,
     pub master_codec: MasterCodec,
+    /// `audio.capture_buffer_seconds` — глубина кольцевого буфера между
+    /// аудио-callback'ом и consumer'ом (запас на джиттер планировщика).
+    pub capture_buffer_seconds: f32,
+    /// `audio.level_update_hz` — частота событий индикаторов уровня (~20–30 Гц).
+    pub level_update_hz: u32,
     pub archive_copy: ArchiveCopySettings,
 }
 
@@ -77,6 +82,10 @@ impl Default for AudioSettings {
             bit_depth: 16,
             channels: 1,
             master_codec: MasterCodec::WavPcm,
+            // configuration.md: audio.capture_buffer_seconds = 2.0
+            capture_buffer_seconds: 2.0,
+            // configuration.md: audio.level_update_hz = 25
+            level_update_hz: 25,
             archive_copy: ArchiveCopySettings::default(),
         }
     }
@@ -388,6 +397,8 @@ mod tests {
         assert_eq!(s.audio.bit_depth, 16);
         assert_eq!(s.audio.channels, 1);
         assert_eq!(s.audio.master_codec, MasterCodec::WavPcm);
+        assert_eq!(s.audio.capture_buffer_seconds, 2.0);
+        assert_eq!(s.audio.level_update_hz, 25);
         assert_eq!(s.recorder.segment_seconds, 30);
         assert_eq!(s.recorder.flush_interval_ms, 1_500);
         assert_eq!(s.retention.mode, RetentionMode::UntilConfirmedPlusWindow);

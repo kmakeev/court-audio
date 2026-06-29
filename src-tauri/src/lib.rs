@@ -17,9 +17,15 @@ pub mod sync;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(ipc::audio_cmds::CaptureState::default())
         .invoke_handler(tauri::generate_handler![
             ipc::get_settings,
-            ipc::save_settings
+            ipc::save_settings,
+            ipc::audio_cmds::list_audio_devices,
+            ipc::audio_cmds::start_capture,
+            ipc::audio_cmds::stop_capture,
+            ipc::audio_cmds::pause_capture,
+            ipc::audio_cmds::resume_capture
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска приложения «Аудиопротокол»");

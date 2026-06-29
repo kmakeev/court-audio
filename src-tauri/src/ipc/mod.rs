@@ -1,7 +1,8 @@
 //! Команды Tauri для UI (`promts/00_infra.md`, шаг 6).
 //!
-//! На этапе 00 — только чтение/сохранение модели [`Settings`]. Команды записи
-//! звука, выгрузки и диагностики добавятся на этапах 01+.
+//! Этап 00 — чтение/сохранение модели [`Settings`]. Этап 01 — команды захвата
+//! звука и события уровня/состояния (см. [`audio_cmds`]). Выгрузка и расширенная
+//! диагностика — этапы 06+.
 
 use std::fs;
 use std::path::PathBuf;
@@ -9,6 +10,8 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 use crate::settings::Settings;
+
+pub mod audio_cmds;
 
 /// Имя файла настроек в каталоге конфигурации приложения.
 const SETTINGS_FILE: &str = "settings.json";
@@ -23,11 +26,11 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join(SETTINGS_FILE))
 }
 
-/// Загрузить настройки. При отсутствии файла возвращаются дефолты из реестра
-/// (см. [`Settings::default`]); повреждённый файл не валит приложение.
-#[tauri::command]
-pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
-    let path = settings_path(&app)?;
+/// Загрузить настройки из файла конфигурации (или дефолты реестра при его
+/// отсутствии). Не-командный помощник: используется командами захвата для сборки
+/// параметров записи без дублирования логики.
+pub fn load_settings(app: &AppHandle) -> Result<Settings, String> {
+    let path = settings_path(app)?;
     if !path.exists() {
         return Ok(Settings::default());
     }
@@ -35,6 +38,13 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
         .map_err(|e| format!("не удалось прочитать {}: {e}", path.display()))?;
     serde_json::from_str(&raw)
         .map_err(|e| format!("не удалось разобрать настройки {}: {e}", path.display()))
+}
+
+/// Загрузить настройки. При отсутствии файла возвращаются дефолты из реестра
+/// (см. [`Settings::default`]); повреждённый файл не валит приложение.
+#[tauri::command]
+pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
+    load_settings(&app)
 }
 
 /// Сохранить настройки в файл конфигурации (создаёт каталог при отсутствии).
