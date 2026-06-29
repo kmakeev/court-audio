@@ -1,0 +1,33 @@
+# Rust / Tauri
+/src-tauri/target/
+**/*.rs.bk
+
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Сборки и дистрибутивы
+/src-tauri/gen/
+*.deb
+*.AppImage
+*.msi
+*.exe
+
+# Локальные записи и манифесты (НИКОГДА не коммитить — ПДн)
+/recordings/
+*.wav
+*.flac
+*.sqlite
+*.sqlite-*
+
+# Окружение / секреты
+.env
+.env.*
+!.env.example
+
+# ОС/редакторы
+.DS_Store
+.idea/
+.vscode/
