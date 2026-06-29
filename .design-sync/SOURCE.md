@@ -26,6 +26,7 @@
 | `src/design/BlockHead.tsx` | `src/components/design/BlockHead.tsx` |
 | `src/design/Tag.tsx` | `src/components/design/Tag.tsx` |
 | `src/design/EmptyState.tsx` | `src/components/design/EmptyState.tsx` |
+| `src/design/Checkbox.tsx` | `src/components/design/Checkbox.tsx` |
 
 ## Что НЕ вендорится (намеренно)
 

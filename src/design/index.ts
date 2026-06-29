@@ -7,3 +7,4 @@ export { Card } from './Card';
 export { BlockHead } from './BlockHead';
 export { Tag } from './Tag';
 export { EmptyState } from './EmptyState';
+export { Checkbox } from './Checkbox';

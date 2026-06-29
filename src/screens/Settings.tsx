@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
-import { BlockHead, Button, Card, Tag } from '../design';
+import { BlockHead, Button, Card, Checkbox, Tag } from '../design';
 import {
   getSettings,
   saveSettings,
@@ -154,8 +154,8 @@ export function SettingsScreen() {
               <Field label="Шифрование at-rest">
                 <Checkbox
                   checked={settings.storage.encrypt_at_rest}
-                  onChange={(c) =>
-                    update((d) => { d.storage.encrypt_at_rest = c; })
+                  onChange={(e) =>
+                    update((d) => { d.storage.encrypt_at_rest = e.target.checked; })
                   }
                 />
               </Field>
@@ -185,14 +185,16 @@ export function SettingsScreen() {
               <Field label="Авто-выгрузка">
                 <Checkbox
                   checked={settings.sync.auto_upload}
-                  onChange={(c) => update((d) => { d.sync.auto_upload = c; })}
+                  onChange={(e) =>
+                    update((d) => { d.sync.auto_upload = e.target.checked; })
+                  }
                 />
               </Field>
               <Field label="Оффлайн-очередь">
                 <Checkbox
                   checked={settings.sync.offline_queue.enabled}
-                  onChange={(c) =>
-                    update((d) => { d.sync.offline_queue.enabled = c; })
+                  onChange={(e) =>
+                    update((d) => { d.sync.offline_queue.enabled = e.target.checked; })
                   }
                 />
               </Field>
@@ -306,23 +308,6 @@ function NumberInput({
       }}
       className="num"
       style={inputStyle}
-    />
-  );
-}
-
-function Checkbox({
-  checked,
-  onChange,
-}: {
-  checked: boolean;
-  onChange: (c: boolean) => void;
-}) {
-  return (
-    <input
-      type="checkbox"
-      checked={checked}
-      onChange={(e) => onChange(e.target.checked)}
-      style={{ width: 18, height: 18, accentColor: 'var(--accent)' }}
     />
   );
 }
