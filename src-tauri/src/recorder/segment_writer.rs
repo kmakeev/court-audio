@@ -83,6 +83,8 @@ pub struct SegmentWriter {
     next_index: u32,
     current: Option<OpenSegment>,
     segments: Vec<SegmentInfo>,
+    /// Курсор: сколько завершённых сегментов уже отдано через [`SegmentWriter::drain_completed`].
+    drained_upto: usize,
     last_flush: Instant,
 }
 
@@ -97,6 +99,7 @@ impl SegmentWriter {
             next_index: 1,
             current: None,
             segments: Vec::new(),
+            drained_upto: 0,
             last_flush: Instant::now(),
         })
     }
@@ -150,6 +153,19 @@ impl SegmentWriter {
         }
         self.last_flush = Instant::now();
         Ok(())
+    }
+
+    /// Вернуть сегменты, **завершённые с прошлого вызова** (ротацией или
+    /// финализацией). Потребитель опрашивает этот метод, чтобы по факту закрытия
+    /// сегмента журналировать его и зеркалировать (этап 02). Не аллоцирует, пока
+    /// нет новых завершённых сегментов.
+    pub fn drain_completed(&mut self) -> Vec<SegmentInfo> {
+        if self.drained_upto >= self.segments.len() {
+            return Vec::new();
+        }
+        let drained = self.segments[self.drained_upto..].to_vec();
+        self.drained_upto = self.segments.len();
+        drained
     }
 
     /// Завершить запись: финализировать текущий сегмент и вернуть список всех
@@ -288,6 +304,33 @@ mod tests {
         assert_eq!(lens, vec![10, 10, 5]);
         // Непрерывность: сумма кадров = всем записанным семплам, без потерь.
         assert_eq!(lens.iter().sum::<u32>() as usize, samples.len());
+    }
+
+    #[test]
+    fn drain_completed_yields_each_segment_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        // rate=10, segment=1s -> порог 10 кадров.
+        let mut w = SegmentWriter::new(cfg(tmp.path().to_path_buf(), 10, 1)).unwrap();
+
+        // Первые 10 кадров закрывают сегмент №1 ротацией.
+        w.write_samples(&(0..10).map(|i| i as i16).collect::<Vec<_>>())
+            .unwrap();
+        let first = w.drain_completed();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].index, 1);
+        // Повторный дрейн без новых завершений — пусто.
+        assert!(w.drain_completed().is_empty());
+
+        // Ещё 10 кадров -> сегмент №2; 5 кадров остаются в открытом №3.
+        w.write_samples(&(0..15).map(|i| i as i16).collect::<Vec<_>>())
+            .unwrap();
+        let second = w.drain_completed();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].index, 2);
+
+        // Финализация закрывает №3; finalize отдаёт ВСЕ сегменты.
+        let all = w.finalize().unwrap();
+        assert_eq!(all.len(), 3);
     }
 
     #[test]
