@@ -85,6 +85,11 @@ export function RecordScreen() {
   const [deviceName, setDeviceName] = useState('');
   const [settings, setSettings] = useState<Settings | null>(null);
   const [state, setState] = useState<UiState>('idle');
+  // Фаза сохранения записи (финализация после стопа). Отдельный флаг, а не
+  // `state==='stopping'`: backend-событие `capture_state: stopped` приходит сразу
+  // по завершении stopCapture и иначе мгновенно сбросило бы индикатор. Флагом
+  // управляет только onStop — держим его минимум заметное время.
+  const [saving, setSaving] = useState(false);
   const [level, setLevel] = useState<LevelEvent>({ channels: [] });
   const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -274,10 +279,7 @@ export function RecordScreen() {
     // `capture_state: stopping`: синхронная команда может задержать доставку
     // события в webview до своего возврата, и индикатор бы не появился.
     setState('stopping');
-    // Дать webview отрисовать кадр «Сохранение записи…» ДО вызова stopCapture:
-    // финализация (сброс/хеши/журнал) может заблокировать поток, и без
-    // гарантированной отрисовки индикатор не успел бы проявиться.
-    await nextPaint();
+    setSaving(true);
     const startedAt = Date.now();
     try {
       await stopCapture();
@@ -295,6 +297,8 @@ export function RecordScreen() {
       setStartedAtMs(null);
       setSessionInfo(null);
       setError(describeError(e));
+    } finally {
+      setSaving(false);
     }
   }, []);
 
@@ -542,7 +546,7 @@ export function RecordScreen() {
 
       {/* Фаза сохранения после стопа: финализация может занять время —
           показываем прогресс, чтобы станция не казалась «зависшей». */}
-      {state === 'stopping' && (
+      {saving && (
         <Card variant="accent" role="status" aria-live="polite">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
             <Tag tone="accent">Сохранение записи…</Tag>
@@ -556,7 +560,7 @@ export function RecordScreen() {
       )}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {(state === 'idle' || state === 'stopped') && (
+        {(state === 'idle' || state === 'stopped') && !saving && (
           <Button variant="primary" onClick={() => void onStart()} disabled={!deviceName}>
             ● Старт записи
           </Button>
@@ -759,25 +763,6 @@ function formatChannels(n: number): string {
   if (n === 1) return 'моно';
   if (n === 2) return 'стерео';
   return `${n} кан.`;
-}
-
-// Дождаться отрисовки кадра (двойной requestAnimationFrame — после commit'а
-// React браузер успевает покрасить). Фолбэк по таймеру — для сред без rAF
-// (тесты) и чтобы не зависнуть дольше одного кадра.
-function nextPaint(): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const done = () => {
-      if (!settled) {
-        settled = true;
-        resolve();
-      }
-    };
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => requestAnimationFrame(done));
-    }
-    setTimeout(done, 32);
-  });
 }
 
 // Подождать, пока с момента `startedAt` пройдёт хотя бы `minMs` (минимальная

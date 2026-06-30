@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -227,7 +227,7 @@ pub struct CaptureSession {
     /// Флаг «на паузе» — разделяется с supervisor'ом, чтобы watchdog не
     /// перезапускал намеренно приостановленный (оператором) захват.
     paused: Arc<AtomicBool>,
-    supervisor_stop: Arc<AtomicBool>,
+    supervisor_stop: Arc<StopSignal>,
     supervisor_handle: Option<JoinHandle<()>>,
 }
 
@@ -305,7 +305,7 @@ impl CaptureSession {
 
         // Supervisor (watchdog + монитор устройства) — только если задан интервал.
         let paused = Arc::new(AtomicBool::new(false));
-        let supervisor_stop = Arc::new(AtomicBool::new(false));
+        let supervisor_stop = Arc::new(StopSignal::default());
         let supervisor_handle = match reliability.watchdog_timeout {
             Some(timeout) => Some(spawn_supervisor(SupervisorCtx {
                 cmd_tx: cmd_tx.clone(),
@@ -382,7 +382,7 @@ impl CaptureSession {
     }
 
     fn shutdown_supervisor(&mut self) {
-        self.supervisor_stop.store(true, Ordering::Release);
+        self.supervisor_stop.stop();
         if let Some(h) = self.supervisor_handle.take() {
             let _ = h.join();
         }
@@ -441,7 +441,13 @@ impl MonitorSession {
         let monitor_handle = thread::Builder::new()
             .name("audio-monitor".into())
             .spawn(move || {
-                run_monitor(consumer, native.channels, level_update_hz, level_cb, stop_for_thread)
+                run_monitor(
+                    consumer,
+                    native.channels,
+                    level_update_hz,
+                    level_cb,
+                    stop_for_thread,
+                )
             })
             .map_err(|e| AudioError::Stream(e.to_string()))?;
 
@@ -506,12 +512,50 @@ fn run_monitor(
 }
 
 /// Контекст supervisor-потока надёжности.
+/// Прерываемый сигнал остановки: флаг + [`Condvar`]. Нужен, чтобы спящий
+/// supervisor-поток просыпался **немедленно** при остановке, а не досыпал весь
+/// интервал watchdog'а (`watchdog_timeout_ms`). Без этого `session.stop()`,
+/// который join'ит supervisor, ждал бы до полного интервала — отсюда заметная
+/// «задумчивость» на остановке записи.
+#[derive(Default)]
+struct StopSignal {
+    stopped: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl StopSignal {
+    /// Сигнализировать остановку и разбудить ожидающего.
+    fn stop(&self) {
+        let mut g = self.stopped.lock().unwrap_or_else(|e| e.into_inner());
+        *g = true;
+        self.cv.notify_all();
+    }
+
+    fn is_stopped(&self) -> bool {
+        *self.stopped.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Подождать до `dur` либо до сигнала остановки. Возвращает `true`, если
+    /// остановлены (можно выходить из цикла).
+    fn wait_timeout(&self, dur: Duration) -> bool {
+        let g = self.stopped.lock().unwrap_or_else(|e| e.into_inner());
+        if *g {
+            return true;
+        }
+        let (g, _) = self
+            .cv
+            .wait_timeout(g, dur)
+            .unwrap_or_else(|e| e.into_inner());
+        *g
+    }
+}
+
 struct SupervisorCtx {
     cmd_tx: Sender<ControlCmd>,
     heartbeat: Heartbeat,
     err_rx: Receiver<()>,
     paused: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
+    stop: Arc<StopSignal>,
     timeout: Duration,
     auto_resume: bool,
     device_name: Option<String>,
@@ -555,7 +599,7 @@ fn supervisor_loop(ctx: SupervisorCtx) {
     // Пауза, инициированная обрывом устройства (для корректного авто-резюма).
     let mut device_paused = false;
 
-    while !ctx.stop.load(Ordering::Acquire) {
+    while !ctx.stop.is_stopped() {
         // Дренируем сигналы ошибок стрима, чтобы канал не рос (быстрый признак
         // проблемы устройства; подтверждение — через пробник присутствия ниже).
         while ctx.err_rx.try_recv().is_ok() {}
@@ -598,7 +642,11 @@ fn supervisor_loop(ctx: SupervisorCtx) {
             }
         }
 
-        thread::sleep(poll);
+        // Прерываемое ожидание: просыпаемся сразу при остановке, иначе досыпаем
+        // интервал watchdog'а. Так `stop()` не ждёт целый `watchdog_timeout_ms`.
+        if ctx.stop.wait_timeout(poll) {
+            break;
+        }
     }
 }
 
