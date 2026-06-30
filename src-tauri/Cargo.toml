@@ -29,10 +29,19 @@ hound = "3.5"
 # Кроссплатформенный замер свободного места (Linux/Windows/macOS) без ОС-хардкода.
 fs2 = "0.4"
 
+# ── Этап 03 (store_integrity): манифест, целостность, шифрование at-rest ──────
+# SQLite-манифест (WAL) — bundled, без системного libsqlite (импортозамещение).
+rusqlite = { version = "0.32", features = ["bundled"] }
+# SHA-256 сегментов и хеш-цепочки.
+sha2 = "0.10"
+# AES-256-GCM шифрование сегментов at-rest.
+aes-gcm = "0.10"
+# Argon2id — производный ключ из парольной фразы станции (фолбэк OS-keystore).
+argon2 = "0.5"
+# Генерация nonce (96 бит) и соли KDF.
+rand = "0.8"
+
 # ── Крейты профильных этапов (подключаются по мере реализации) ───────────────
-# Этап 03 (store_integrity): SQLite-манифест и SHA-256 хеш-цепочка
-# rusqlite = { version = "0.32", features = ["bundled"] }
-# sha2 = "0.10"
 # Этап 06 (sync_agent): асинхронная возобновляемая выгрузка в ex_system
 # tokio = { version = "1", features = ["full"] }
 # reqwest = { version = "0.12", features = ["json", "stream"] }

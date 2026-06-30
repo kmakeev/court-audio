@@ -44,13 +44,21 @@
 | Параметр | Обл. | Дефолт | Назначение |
 |---|---|---|---|
 | `storage.root_path` | С | `<data-dir>/recordings` | Корень локального хранилища |
-| `storage.encrypt_at_rest` | С | `true` | Шифрование записей на диске |
+| `storage.encrypt_at_rest` | С | `true` | Шифрование записей на диске (AES-256-GCM на сегмент) |
+| `storage.key_source` | С | `os_keystore` | Источник ключа шифрования at-rest |
 | `retention.mode` | С | `until_confirmed_plus_window` | Политика удаления локальной копии |
 | `retention.require_integrity_verified` | С | `true` | Удалять только после серверного `integrity_verified=true` |
 | `retention.safety_window_hours` | С | `72` | Буфер после подтверждения до удаления |
 
 `retention.mode` ∈ { `until_confirmed_plus_window` (дефолт), `delete_on_confirm`
 (минимизация ПДн), `manual` (до ручного удаления) }.
+
+`storage.key_source` ∈ { `os_keystore` (дефолт), `passphrase` }. Секрет в файле
+настроек **не хранится**. Для `passphrase` (а также как фолбэк, пока OS-keystore
+не интегрирован — этап `08`) ключ — Argon2id из парольной фразы станции,
+переданной через env `COURT_AUDIO_STATION_PASSPHRASE`; соль персистится в
+`<root_path>/key.salt`. Параметры Argon2id — рекомендованные дефолты крейта
+(крипто-константы, не бизнес-логика).
 
 ## Целостность
 

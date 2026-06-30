@@ -38,6 +38,21 @@ pub enum ArchiveCodec {
     Flac,
 }
 
+/// Источник ключа шифрования at-rest. `configuration.md` → «Хранилище и
+/// ретеншн». Сам секрет в файле настроек **не хранится**: парольная фраза
+/// приходит из env `COURT_AUDIO_STATION_PASSPHRASE`, эта настройка лишь выбирает
+/// провайдер ключа.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeySource {
+    /// Системное защищённое хранилище ОС (keychain/secret-service/DPAPI).
+    /// Реальная интеграция — этап `08`; до неё рантайм откатывается к парольной
+    /// фразе (см. `store::crypto`).
+    OsKeystore,
+    /// Производный ключ из парольной фразы станции (Argon2id) — оффлайн/headless.
+    Passphrase,
+}
+
 // ── Аудио ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,6 +181,8 @@ pub struct StorageSettings {
     /// (резолвится в рантайме по системному data-каталогу).
     pub root_path: Option<String>,
     pub encrypt_at_rest: bool,
+    /// `storage.key_source` — откуда брать ключ шифрования at-rest.
+    pub key_source: KeySource,
 }
 
 impl Default for StorageSettings {
@@ -174,6 +191,8 @@ impl Default for StorageSettings {
             root_path: None,
             // configuration.md: storage.encrypt_at_rest = true
             encrypt_at_rest: true,
+            // configuration.md: storage.key_source = os_keystore
+            key_source: KeySource::OsKeystore,
         }
     }
 }
@@ -401,7 +420,13 @@ mod tests {
         assert_eq!(s.audio.level_update_hz, 25);
         assert_eq!(s.recorder.segment_seconds, 30);
         assert_eq!(s.recorder.flush_interval_ms, 1_500);
+        assert!(s.storage.encrypt_at_rest);
+        assert_eq!(s.storage.key_source, KeySource::OsKeystore);
         assert_eq!(s.retention.mode, RetentionMode::UntilConfirmedPlusWindow);
+        assert!(s.retention.require_integrity_verified);
+        assert_eq!(s.retention.safety_window_hours, 72);
+        assert_eq!(s.integrity.segment_hash, "sha256");
+        assert!(s.integrity.hash_chain);
         assert_eq!(s.sync.chunk_size_mb, 8);
         assert_eq!(s.sync.retry.max_attempts, 0);
     }
