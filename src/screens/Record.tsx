@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import { BlockHead, Button, Card, CriticalNotice, Field, Select, Tag } from '../design';
+import { ConfirmDialog } from '../shell/ConfirmDialog';
 import {
   discardSession,
   getCaptureStatus,
@@ -13,8 +14,11 @@ import {
   resumeCapture,
   scanRecoverable,
   startCapture,
+  startMonitor,
   stopCapture,
+  stopMonitor,
   type CaptureStateValue,
+  type ChannelLevel,
   type DeviceInfo,
   type LevelEvent,
   type RecoverableSession,
@@ -71,11 +75,15 @@ export function RecordScreen() {
   const [deviceName, setDeviceName] = useState('');
   const [settings, setSettings] = useState<Settings | null>(null);
   const [state, setState] = useState<UiState>('idle');
-  const [level, setLevel] = useState<LevelEvent>({ peak: 0, rms: 0 });
+  const [level, setLevel] = useState<LevelEvent>({ channels: [] });
   const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [caseRef, setCaseRef] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Готовность первичной загрузки (чтобы мониторинг не стартовал до резолва).
+  const [loaded, setLoaded] = useState(false);
+  // Запрошенное подтверждение действия (стоп/пауза) — модальное окно.
+  const [confirm, setConfirm] = useState<null | 'stop' | 'pause'>(null);
   // Прогресс активной сессии (каталог + число записанных сегментов) —
   // наглядное подтверждение, что запись действительно идёт.
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
@@ -131,12 +139,30 @@ export function RecordScreen() {
             segment_count: status.segment_count,
           });
         }
+        setLoaded(true);
       })
-      .catch((e: unknown) => active && setError(describeError(e)));
+      .catch((e: unknown) => {
+        if (active) {
+          setError(describeError(e));
+          setLoaded(true);
+        }
+      });
     return () => {
       active = false;
     };
   }, []);
+
+  // Живой мониторинг уровня, пока не идёт запись: показывает, что микрофон
+  // работает (открывает устройство → запросит доступ к микрофону). Запись сама
+  // эмитит уровни, поэтому монитор нужен только в idle/stopped.
+  useEffect(() => {
+    if (!loaded) return;
+    if (state !== 'idle' && state !== 'stopped') return;
+    void startMonitor().catch(() => {});
+    return () => {
+      void stopMonitor().catch(() => {});
+    };
+  }, [loaded, state]);
 
   // Подписки на события ядра (уровень, состояние, надёжность).
   useEffect(() => {
@@ -216,7 +242,7 @@ export function RecordScreen() {
       setState('stopped');
       setStartedAtMs(null);
       setSessionInfo(null);
-      setLevel({ peak: 0, rms: 0 });
+      setLevel({ channels: [] });
     } catch (e) {
       setError(describeError(e));
     }
@@ -240,22 +266,24 @@ export function RecordScreen() {
     }
   }, []);
 
-  // Горячие клавиши: R — старт, S — стоп, Пробел — пауза/возобновление.
-  // Не перехватываем, когда фокус в поле ввода (привязка к делу).
+  // Горячие клавиши: R — старт, S — стоп (с подтверждением), Пробел — пауза
+  // (с подтверждением) / возобновление. Не перехватываем при фокусе в поле
+  // ввода и при открытом окне подтверждения.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      if (confirm) return;
       const k = e.key.toLowerCase();
       if (k === 'r' && (state === 'idle' || state === 'stopped')) {
         e.preventDefault();
         void onStart();
       } else if (k === 's' && (state === 'recording' || state === 'paused')) {
         e.preventDefault();
-        void onStop();
+        setConfirm('stop');
       } else if (e.key === ' ' && state === 'recording') {
         e.preventDefault();
-        void onPause();
+        setConfirm('pause');
       } else if (e.key === ' ' && state === 'paused') {
         e.preventDefault();
         void onResume();
@@ -263,12 +291,15 @@ export function RecordScreen() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state, onStart, onStop, onPause, onResume]);
+  }, [state, confirm, onStart, onResume]);
 
   const isActive = state === 'recording' || state === 'paused';
   const quality = settings
     ? `${formatHz(settings.audio.sample_rate_hz)} · ${settings.audio.bit_depth} бит · ${formatChannels(settings.audio.channels)}`
     : '—';
+  // Текущая (идущая) сессия не предлагается к восстановлению — она уже активна.
+  const activeDir = sessionInfo?.output_dir ?? null;
+  const pendingRecoverable = recoverable.filter((r) => r.dir !== activeDir);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
@@ -302,15 +333,16 @@ export function RecordScreen() {
         <CriticalNotice variant="critical" title="Ошибка записи" description={error} />
       )}
 
-      {/* Баннер восстановления — решение из этапа 02 (продолжить/закрыть). */}
-      {recoverable.length > 0 && (
+      {/* Баннер восстановления — решение из этапа 02 (продолжить/закрыть).
+          Текущую идущую сессию сюда не показываем (она уже активна). */}
+      {pendingRecoverable.length > 0 && (
         <Card variant="accent">
           <BlockHead
             numeral="!"
             title="Найдена незавершённая сессия"
             hint="После сбоя осталась запись. Продолжить её восстановление или закрыть."
           />
-          {recoverable.map((r) => (
+          {pendingRecoverable.map((r) => (
             <div
               key={r.dir}
               style={{
@@ -407,7 +439,21 @@ export function RecordScreen() {
         </div>
 
         <div style={{ marginTop: 20 }}>
-          <span style={fieldLabelStyle}>Уровень сигнала</span>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 8,
+            }}
+          >
+            <span style={{ ...fieldLabelStyle, marginBottom: 0 }}>Уровень сигнала</span>
+            {/* Дубль статуса записи рядом с индикатором уровня. */}
+            <Tag tone={STATUS_TONE[state]} role="status" aria-live="polite">
+              {isRecordingDot(state)}
+              {state === 'idle' || state === 'stopped' ? 'Мониторинг' : STATUS_LABEL[state]}
+            </Tag>
+          </div>
           <LevelMeter level={level} active={state === 'recording'} />
         </div>
 
@@ -449,7 +495,7 @@ export function RecordScreen() {
           </Button>
         )}
         {state === 'recording' && (
-          <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => void onPause()}>
+          <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => setConfirm('pause')}>
             ❚❚ Пауза
           </Button>
         )}
@@ -459,7 +505,7 @@ export function RecordScreen() {
           </Button>
         )}
         {isActive && (
-          <Button variant="primary" onClick={() => void onStop()}>
+          <Button variant="primary" onClick={() => setConfirm('stop')}>
             ■ Стоп
           </Button>
         )}
@@ -469,6 +515,31 @@ export function RecordScreen() {
         Горячие клавиши: <kbd>R</kbd> — старт, <kbd>S</kbd> — стоп,{' '}
         <kbd>Пробел</kbd> — пауза/возобновление.
       </p>
+
+      <ConfirmDialog
+        open={confirm === 'stop'}
+        title="Остановить запись?"
+        description="Запись сессии будет завершена и сегменты финализированы. Возобновить эту же сессию после остановки нельзя."
+        confirmLabel="Остановить"
+        tone="danger"
+        onConfirm={() => {
+          setConfirm(null);
+          void onStop();
+        }}
+        onCancel={() => setConfirm(null)}
+      />
+      <ConfirmDialog
+        open={confirm === 'pause'}
+        title="Поставить запись на паузу?"
+        description="Захват приостановится. Сегменты уже на диске сохранены; запись можно возобновить."
+        confirmLabel="Поставить на паузу"
+        tone="neutral"
+        onConfirm={() => {
+          setConfirm(null);
+          void onPause();
+        }}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }
@@ -482,58 +553,85 @@ function toMeterPct(v: number): number {
   return Math.max(0, Math.min(100, pct));
 }
 
-// ── Индикатор уровня: столбики RMS/пик + клиппинг (решение «Решено») ─────────
+// ── Индикатор уровня: столбик RMS/пик + клиппинг на каждый канал записи ──────
+// Каналов может быть несколько (многоканал) — рисуем по столбику на канал.
 function LevelMeter({ level, active }: { level: LevelEvent; active: boolean }) {
-  const rmsPct = toMeterPct(level.rms);
-  const peakPct = toMeterPct(level.peak);
-  const clipping = active && level.peak >= FULL_SCALE * CLIP_RATIO;
+  const channels = level.channels.length > 0 ? level.channels : [{ peak: 0, rms: 0 }];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {channels.map((ch, i) => (
+        <ChannelMeter key={i} index={i} total={channels.length} ch={ch} active={active} />
+      ))}
+    </div>
+  );
+}
+
+function ChannelMeter({
+  index,
+  total,
+  ch,
+  active,
+}: {
+  index: number;
+  total: number;
+  ch: ChannelLevel;
+  active: boolean;
+}) {
+  const rmsPct = toMeterPct(ch.rms);
+  const peakPct = toMeterPct(ch.peak);
+  const clipping = active && ch.peak >= FULL_SCALE * CLIP_RATIO;
   return (
     <div
       role="meter"
-      aria-label="Индикатор уровня сигнала"
+      aria-label={total > 1 ? `Уровень канала ${index + 1}` : 'Индикатор уровня сигнала'}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(rmsPct)}
-      style={{ marginTop: 8 }}
     >
-      <div
-        style={{
-          position: 'relative',
-          height: 22,
-          background: 'var(--paper-strong)',
-          border: '1px solid var(--hairline)',
-          overflow: 'hidden',
-        }}
-      >
-        {/* Заливка RMS */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {total > 1 && (
+          <span className="num" style={{ fontSize: 11, color: 'var(--muted)', width: 28 }}>
+            К{index + 1}
+          </span>
+        )}
         <div
           style={{
-            position: 'absolute',
-            inset: 0,
-            width: `${rmsPct}%`,
-            background: clipping ? 'var(--accent)' : 'var(--green)',
-            transition: 'width 80ms linear',
+            position: 'relative',
+            flex: 1,
+            height: 22,
+            background: 'var(--paper-strong)',
+            border: '1px solid var(--hairline)',
+            overflow: 'hidden',
           }}
-        />
-        {/* Маркер пика */}
-        <div
-          aria-hidden="true"
-          style={{
-            position: 'absolute',
-            top: 0,
-            bottom: 0,
-            left: `calc(${peakPct}% - 1px)`,
-            width: 2,
-            background: 'var(--ink)',
-          }}
-        />
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-        <span className="num" style={{ fontSize: 11, color: 'var(--muted)' }}>
-          RMS {Math.round(rmsPct)}% · пик {Math.round(peakPct)}%
-        </span>
+        >
+          {/* Заливка RMS */}
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: `${rmsPct}%`,
+              background: clipping ? 'var(--accent)' : 'var(--green)',
+              transition: 'width 80ms linear',
+            }}
+          />
+          {/* Маркер пика */}
+          <div
+            aria-hidden="true"
+            style={{
+              position: 'absolute',
+              top: 0,
+              bottom: 0,
+              left: `calc(${peakPct}% - 1px)`,
+              width: 2,
+              background: 'var(--ink)',
+            }}
+          />
+        </div>
         {clipping && <Tag tone="accent">Клиппинг</Tag>}
       </div>
+      <span className="num" style={{ fontSize: 11, color: 'var(--muted)' }}>
+        RMS {Math.round(rmsPct)}% · пик {Math.round(peakPct)}%
+      </span>
     </div>
   );
 }

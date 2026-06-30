@@ -49,11 +49,18 @@ pub struct NativeFormat {
     pub channels: u16,
 }
 
-/// Событие индикатора уровня (RMS/пик нормированного сигнала, `[0.0, 1.0]`).
-#[derive(Debug, Clone, Copy, Serialize)]
-pub struct LevelEvent {
+/// Уровень одного канала (RMS/пик нормированного сигнала, `[0.0, 1.0]`).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct ChannelLevel {
     pub peak: f32,
     pub rms: f32,
+}
+
+/// Событие индикатора уровня — по каналу на дорожку (v1 обычно 1, но многоканал
+/// предусмотрен: UI рисует по столбику на канал).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LevelEvent {
+    pub channels: Vec<ChannelLevel>,
 }
 
 /// Колбэк уровней (IPC подключает к нему Tauri-эмиттер `audio_level`).
@@ -397,6 +404,107 @@ impl Drop for CaptureSession {
     }
 }
 
+/// Лёгкий мониторинг уровня **без записи** (этап 04): открывает устройство и
+/// шлёт события уровня по каналам, чтобы оператор видел работу микрофона до
+/// старта записи. Переиспользует [`capture_thread`] (тот же выбор устройства/
+/// конфига и кольцевой буфер), но вместо записи только считает уровни и
+/// отбрасывает семплы. Без watchdog/журнала/сегментов — мониторинг не критичен.
+pub struct MonitorSession {
+    cmd_tx: Sender<ControlCmd>,
+    capture_handle: Option<JoinHandle<()>>,
+    monitor_stop: Arc<AtomicBool>,
+    monitor_handle: Option<JoinHandle<()>>,
+}
+
+impl MonitorSession {
+    /// Запустить мониторинг: поднять `cpal`-поток и поток расчёта уровней.
+    pub fn start(params: CaptureParams, level_cb: LevelCallback) -> Result<Self, AudioError> {
+        let (init_tx, init_rx) = mpsc::channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        // Ошибки потока мониторингу не критичны (нет watchdog): дренируем в никуда.
+        let (err_tx, _err_rx) = mpsc::channel::<()>();
+
+        let heartbeat = Heartbeat::new();
+        let thread_params = params.clone();
+        let capture_handle = thread::Builder::new()
+            .name("audio-monitor-capture".into())
+            .spawn(move || capture_thread(thread_params, init_tx, cmd_rx, heartbeat, err_tx))
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
+
+        let (consumer, native) = init_rx
+            .recv()
+            .map_err(|_| AudioError::Stream("поток мониторинга не инициализировался".into()))??;
+
+        let monitor_stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = Arc::clone(&monitor_stop);
+        let level_update_hz = params.level_update_hz;
+        let monitor_handle = thread::Builder::new()
+            .name("audio-monitor".into())
+            .spawn(move || {
+                run_monitor(consumer, native.channels, level_update_hz, level_cb, stop_for_thread)
+            })
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
+
+        Ok(Self {
+            cmd_tx,
+            capture_handle: Some(capture_handle),
+            monitor_stop,
+            monitor_handle: Some(monitor_handle),
+        })
+    }
+
+    /// Остановить мониторинг и освободить устройство.
+    pub fn stop(mut self) {
+        self.shutdown();
+    }
+
+    fn shutdown(&mut self) {
+        self.monitor_stop.store(true, Ordering::Release);
+        let _ = self.cmd_tx.send(ControlCmd::Stop);
+        if let Some(h) = self.capture_handle.take() {
+            let _ = h.join();
+        }
+        if let Some(h) = self.monitor_handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+impl Drop for MonitorSession {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Поток мониторинга: читает кольцевой буфер, эмитит уровни по нативным каналам
+/// устройства (с троттлингом до `level_update_hz`) и отбрасывает семплы.
+fn run_monitor(
+    consumer: ring::Consumer,
+    native_channels: u16,
+    level_update_hz: u32,
+    level_cb: LevelCallback,
+    stop: Arc<AtomicBool>,
+) {
+    let mut scratch = vec![0.0f32; consumer.capacity().max(1)];
+    let poll = Duration::from_secs_f64(1.0 / (level_update_hz.max(1) as f64));
+    let mut last_emit = Instant::now();
+    while !stop.load(Ordering::Acquire) {
+        let n = consumer.pop_slice(&mut scratch);
+        if n > 0 {
+            if last_emit.elapsed() >= poll {
+                level_cb(levels_of(&scratch[..n], native_channels));
+                last_emit = Instant::now();
+            }
+            continue;
+        }
+        if last_emit.elapsed() >= poll {
+            level_cb(levels_of(&[], native_channels));
+            last_emit = Instant::now();
+        }
+        thread::sleep(poll);
+    }
+}
+
 /// Контекст supervisor-потока надёжности.
 struct SupervisorCtx {
     cmd_tx: Sender<ControlCmd>,
@@ -703,7 +811,8 @@ pub fn run_consumer(
             let pcm = convert::quantize_i16(&mono);
             writer.write_samples(&pcm)?;
             if last_emit.elapsed() >= poll {
-                level_cb(level_of(&mono));
+                // Уровни — по записываемым (target) каналам.
+                level_cb(levels_of(&mono, cfg.target_channels));
                 last_emit = Instant::now();
             }
             writer.maybe_flush()?;
@@ -745,10 +854,7 @@ pub fn run_consumer(
             break;
         }
         if last_emit.elapsed() >= poll {
-            level_cb(LevelEvent {
-                peak: 0.0,
-                rms: 0.0,
-            });
+            level_cb(levels_of(&[], cfg.target_channels));
             last_emit = Instant::now();
         }
         writer.maybe_flush()?;
@@ -786,25 +892,33 @@ fn check_disk(rel: &ConsumerReliability, last: &mut DiskStatus) -> DiskStatus {
     status
 }
 
-/// Пик (макс. модуль) и RMS нормированного сигнала.
-fn level_of(samples: &[f32]) -> LevelEvent {
-    if samples.is_empty() {
-        return LevelEvent {
-            peak: 0.0,
-            rms: 0.0,
-        };
-    }
-    let mut peak = 0.0f32;
-    let mut sumsq = 0.0f64;
-    for &s in samples {
+/// Уровни по каналам для интерливнутого буфера (`channels` дорожек). Пустой
+/// буфер даёт нули по каждому каналу — UI продолжает рисовать N столбиков.
+fn levels_of(samples: &[f32], channels: u16) -> LevelEvent {
+    let ch = channels.max(1) as usize;
+    let mut peak = vec![0.0f32; ch];
+    let mut sumsq = vec![0.0f64; ch];
+    let mut counts = vec![0u64; ch];
+    for (i, &s) in samples.iter().enumerate() {
+        let c = i % ch;
         let a = s.abs();
-        if a > peak {
-            peak = a;
+        if a > peak[c] {
+            peak[c] = a;
         }
-        sumsq += (s as f64) * (s as f64);
+        sumsq[c] += (s as f64) * (s as f64);
+        counts[c] += 1;
     }
-    let rms = (sumsq / samples.len() as f64).sqrt() as f32;
-    LevelEvent { peak, rms }
+    let channels = (0..ch)
+        .map(|c| ChannelLevel {
+            peak: peak[c],
+            rms: if counts[c] > 0 {
+                (sumsq[c] / counts[c] as f64).sqrt() as f32
+            } else {
+                0.0
+            },
+        })
+        .collect();
+    LevelEvent { channels }
 }
 
 #[cfg(test)]
@@ -812,16 +926,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn level_of_empty_is_zero() {
-        let l = level_of(&[]);
-        assert_eq!(l.peak, 0.0);
-        assert_eq!(l.rms, 0.0);
+    fn levels_of_empty_is_zero_per_channel() {
+        let l = levels_of(&[], 1);
+        assert_eq!(l.channels.len(), 1);
+        assert_eq!(l.channels[0].peak, 0.0);
+        assert_eq!(l.channels[0].rms, 0.0);
     }
 
     #[test]
-    fn level_of_constant_signal() {
-        let l = level_of(&[0.5, -0.5, 0.5, -0.5]);
-        assert!((l.peak - 0.5).abs() < 1e-6);
-        assert!((l.rms - 0.5).abs() < 1e-6);
+    fn levels_of_constant_mono_signal() {
+        let l = levels_of(&[0.5, -0.5, 0.5, -0.5], 1);
+        assert_eq!(l.channels.len(), 1);
+        assert!((l.channels[0].peak - 0.5).abs() < 1e-6);
+        assert!((l.channels[0].rms - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn levels_of_splits_interleaved_channels() {
+        // Канал 0 громкий (±0.8), канал 1 тихий (±0.1); интерлив L,R,L,R.
+        let l = levels_of(&[0.8, 0.1, -0.8, -0.1], 2);
+        assert_eq!(l.channels.len(), 2);
+        assert!((l.channels[0].peak - 0.8).abs() < 1e-6);
+        assert!((l.channels[1].peak - 0.1).abs() < 1e-6);
     }
 }

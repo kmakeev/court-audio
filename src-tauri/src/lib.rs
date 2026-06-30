@@ -18,6 +18,7 @@ pub mod sync;
 pub fn run() {
     tauri::Builder::default()
         .manage(ipc::audio_cmds::CaptureState::default())
+        .manage(ipc::audio_cmds::MonitorState::default())
         .invoke_handler(tauri::generate_handler![
             ipc::get_settings,
             ipc::save_settings,
@@ -27,6 +28,8 @@ pub fn run() {
             ipc::audio_cmds::pause_capture,
             ipc::audio_cmds::resume_capture,
             ipc::audio_cmds::capture_status,
+            ipc::audio_cmds::start_monitor,
+            ipc::audio_cmds::stop_monitor,
             ipc::audio_cmds::scan_recoverable,
             ipc::audio_cmds::recover_session,
             ipc::audio_cmds::discard_session,

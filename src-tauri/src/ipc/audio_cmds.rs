@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::capture::{
-    CaptureParams, CaptureSession, DiskWatch, ReliabilityConfig, ReliabilityEvent,
+    CaptureParams, CaptureSession, DiskWatch, MonitorSession, ReliabilityConfig, ReliabilityEvent,
 };
 use crate::audio::devices::{list_input_devices, DeviceInfo};
 use crate::ipc::{load_settings, resolve_storage_root};
@@ -41,6 +41,10 @@ pub struct ActiveSession {
 /// Управляемое Tauri состояние активной сессии захвата.
 #[derive(Default)]
 pub struct CaptureState(pub Mutex<Option<ActiveSession>>);
+
+/// Управляемое Tauri состояние активного мониторинга уровня (без записи).
+#[derive(Default)]
+pub struct MonitorState(pub Mutex<Option<MonitorSession>>);
 
 /// Ответ `start_capture`: фактический формат и каталог сессии.
 #[derive(Debug, Clone, Serialize)]
@@ -89,6 +93,7 @@ pub fn list_audio_devices() -> Result<Vec<DeviceInfo>, String> {
 pub fn start_capture(
     app: AppHandle,
     state: State<'_, CaptureState>,
+    monitor: State<'_, MonitorState>,
 ) -> Result<CaptureStarted, String> {
     let mut guard = state
         .0
@@ -97,6 +102,9 @@ pub fn start_capture(
     if guard.is_some() {
         return Err("запись уже идёт".to_string());
     }
+
+    // Освобождаем устройство от мониторинга: запись и монитор не делят поток.
+    stop_monitor_internal(&monitor)?;
 
     let settings = load_settings(&app)?;
     let storage_root = resolve_storage_root(&app, &settings)?;
@@ -212,6 +220,69 @@ pub fn resume_capture(app: AppHandle, state: State<'_, CaptureState>) -> Result<
         active.session.resume().map_err(|e| e.to_string())?;
     }
     emit_state(&app, "recording");
+    Ok(())
+}
+
+/// Запустить мониторинг уровня (без записи): открыть устройство и слать события
+/// `audio_level`, чтобы оператор видел работу микрофона до старта записи.
+/// Идемпотентно: повторный вызов перезапускает монитор. Если идёт запись — она
+/// сама эмитит уровни, отдельный монитор не нужен (ошибка).
+#[tauri::command]
+pub fn start_monitor(
+    app: AppHandle,
+    state: State<'_, CaptureState>,
+    monitor: State<'_, MonitorState>,
+) -> Result<(), String> {
+    {
+        let cap = state
+            .0
+            .lock()
+            .map_err(|_| "состояние захвата повреждено".to_string())?;
+        if cap.is_some() {
+            return Err("идёт запись — мониторинг не нужен".to_string());
+        }
+    }
+
+    // Перезапуск: гасим прежний монитор перед открытием устройства заново.
+    stop_monitor_internal(&monitor)?;
+
+    let settings = load_settings(&app)?;
+    let storage_root = resolve_storage_root(&app, &settings)?;
+    // output_dir монитору не нужен (он не пишет), но CaptureParams его требует.
+    let params = build_params(&settings, storage_root);
+
+    let app_for_level = app.clone();
+    let level_cb = Box::new(move |level| {
+        let _ = app_for_level.emit(EVENT_AUDIO_LEVEL, level);
+    });
+
+    let session = MonitorSession::start(params, level_cb).map_err(|e| e.to_string())?;
+    let mut guard = monitor
+        .0
+        .lock()
+        .map_err(|_| "состояние мониторинга повреждено".to_string())?;
+    *guard = Some(session);
+    Ok(())
+}
+
+/// Остановить мониторинг уровня и освободить устройство.
+#[tauri::command]
+pub fn stop_monitor(monitor: State<'_, MonitorState>) -> Result<(), String> {
+    stop_monitor_internal(&monitor)
+}
+
+/// Снять активный монитор (если есть) и корректно остановить его поток.
+fn stop_monitor_internal(monitor: &State<'_, MonitorState>) -> Result<(), String> {
+    let session = {
+        let mut guard = monitor
+            .0
+            .lock()
+            .map_err(|_| "состояние мониторинга повреждено".to_string())?;
+        guard.take()
+    };
+    if let Some(session) = session {
+        session.stop();
+    }
     Ok(())
 }
 

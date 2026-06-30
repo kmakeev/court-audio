@@ -24,10 +24,15 @@ export interface DeviceInfo {
 
 // ── События ядра ────────────────────────────────────────────────────────────
 
-/** `audio_level` — нормированный уровень `[0.0, 1.0]` (capture::LevelEvent). */
-export interface LevelEvent {
+/** Уровень одного канала (нормированный `[0.0, 1.0]`). */
+export interface ChannelLevel {
   peak: number;
   rms: number;
+}
+
+/** `audio_level` — уровни по каналам (capture::LevelEvent; v1 обычно 1 канал). */
+export interface LevelEvent {
+  channels: ChannelLevel[];
 }
 
 /** Состояние конвейера захвата (capture_state). */
@@ -91,6 +96,16 @@ export function pauseCapture(): Promise<void> {
 
 export function resumeCapture(): Promise<void> {
   return invoke('resume_capture');
+}
+
+/** Запустить мониторинг уровня без записи (живой индикатор «микрофон работает»). */
+export function startMonitor(): Promise<void> {
+  return invoke('start_monitor');
+}
+
+/** Остановить мониторинг уровня и освободить устройство. */
+export function stopMonitor(): Promise<void> {
+  return invoke('stop_monitor');
 }
 
 /** Текущее состояние захвата для восстановления статуса UI после перехода. */
