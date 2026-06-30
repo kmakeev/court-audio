@@ -108,6 +108,26 @@ body {
   }
 }
 
+/* ── Индетерминированный прогресс (design/ProgressBar.tsx) ────────────────── */
+.progressbar-indeterminate {
+  animation: progressbar-slide 1.1s ease-in-out infinite;
+}
+@keyframes progressbar-slide {
+  from {
+    left: -40%;
+  }
+  to {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progressbar-indeterminate {
+    animation: none;
+    left: 0;
+    width: 100%;
+  }
+}
+
 /* ── InfoTip «почему так?» (components/design/InfoTip.tsx) ───────────────── */
 .infotip-pop {
   position: absolute;

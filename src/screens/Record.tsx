@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
-import { BlockHead, Button, Card, CriticalNotice, Select, Tag } from '../design';
+import { BlockHead, Button, Card, CriticalNotice, ProgressBar, Select, Tag } from '../design';
 import { CasePicker } from '../components/CasePicker';
 import { ConfirmDialog } from '../shell/ConfirmDialog';
 import {
@@ -519,8 +519,23 @@ export function RecordScreen() {
         )}
       </Card>
 
+      {/* Фаза сохранения после стопа: финализация может занять время —
+          показываем прогресс, чтобы станция не казалась «зависшей». */}
+      {state === 'stopping' && (
+        <Card variant="accent" role="status" aria-live="polite">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <Tag tone="accent">Сохранение записи…</Tag>
+          </div>
+          <ProgressBar label="Сохранение записи" />
+          <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '10px 0 0' }}>
+            Финализация сегментов и контроль целостности (хеши, журнал). Не
+            выключайте станцию.
+          </p>
+        </Card>
+      )}
+
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {!isActive && (
+        {(state === 'idle' || state === 'stopped') && (
           <Button variant="primary" onClick={() => void onStart()} disabled={!deviceName}>
             ● Старт записи
           </Button>

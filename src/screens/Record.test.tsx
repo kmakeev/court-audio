@@ -115,6 +115,24 @@ describe('RecordScreen', () => {
     await waitFor(() => expect(stopped).toHaveBeenCalledTimes(1));
   });
 
+  it('показывает индикатор сохранения в фазе остановки', async () => {
+    wireDefaults();
+    renderRecord();
+    await screen.findByText('Готов к записи');
+
+    await act(async () => {
+      emitEvent('capture_state', { state: 'recording' });
+    });
+    // Фаза финализации после подтверждения стопа.
+    await act(async () => {
+      emitEvent('capture_state', { state: 'stopping' });
+    });
+    expect(await screen.findByText('Сохранение записи…')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    // Кнопка «Старт» в фазе сохранения не показывается.
+    expect(screen.queryByText('● Старт записи')).not.toBeInTheDocument();
+  });
+
   it('не предлагает восстановить текущую идущую сессию', async () => {
     wireDefaults([
       { dir: '/data/recordings/session-current', completed_segments: 1, already_recovered: false },
