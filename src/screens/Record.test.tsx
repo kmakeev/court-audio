@@ -190,12 +190,10 @@ describe('RecordScreen', () => {
     renderRecord();
     await screen.findByText('Готов к записи');
 
-    // Ручной ввод № дела в пикере.
-    fireEvent.click(await screen.findByText('Ввести вручную'));
+    // Кэш пуст (record_count: 0) → пикер уже в режиме ручного ввода.
+    const numberField = await screen.findByLabelText('№ дела');
     act(() => {
-      fireEvent.change(screen.getByLabelText('№ дела'), {
-        target: { value: '№ 7-7/2026' },
-      });
+      fireEvent.change(numberField, { target: { value: '№ 7-7/2026' } });
     });
 
     // Старт записи привязывает выбранное дело к новой сессии.

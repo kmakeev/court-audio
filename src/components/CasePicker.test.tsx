@@ -75,7 +75,7 @@ describe('CasePicker', () => {
     const onBinding = vi.fn();
     render(<Host onBinding={onBinding} />);
 
-    fireEvent.click(await screen.findByText('Ввести вручную'));
+    fireEvent.click(await screen.findByRole('checkbox'));
     const numberField = await screen.findByLabelText('№ дела');
     act(() => {
       fireEvent.change(numberField, { target: { value: '№ 9-1/2026' } });

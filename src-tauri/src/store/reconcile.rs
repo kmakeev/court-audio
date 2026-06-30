@@ -35,14 +35,6 @@ pub fn reconcile_session(store: &ManifestStore, dir: &Path) -> Result<Option<Str
         .to_string();
     let dir_str = dir.to_string_lossy().into_owned();
 
-    let existing = store.get_session(&id)?;
-    // Уже удалена ретеншном — не воскрешаем.
-    if let Some(s) = &existing {
-        if s.status == SessionStatus::Purged {
-            return Ok(Some(id));
-        }
-    }
-
     let status = if state.recovered {
         SessionStatus::Recovered
     } else if state.stopped {
@@ -50,6 +42,24 @@ pub fn reconcile_session(store: &ManifestStore, dir: &Path) -> Result<Option<Str
     } else {
         SessionStatus::Recording
     };
+
+    let existing = store.get_session(&id)?;
+    if let Some(s) = &existing {
+        // Уже удалена ретеншном — не воскрешаем.
+        if s.status == SessionStatus::Purged {
+            return Ok(Some(id));
+        }
+        // Терминальная сессия с тем же числом сегментов уже полностью
+        // реконсилирована: ничего не изменилось — пропускаем дорогой пересчёт
+        // SHA-256 по всем сегментам. Без этого каждый показ списка сессий и
+        // диагностики пере-хешировал бы все записи (видимые паузы интерфейса).
+        if s.status == status
+            && matches!(status, SessionStatus::Stopped | SessionStatus::Recovered)
+            && store.get_segments(&id)?.len() == state.completed_segments.len()
+        {
+            return Ok(Some(id));
+        }
+    }
 
     // База — существующая запись (сохраняем поля выгрузки/привязки/подтверждения),
     // иначе новая со станцией/оператором «неизвестно» (уточнятся при ресюме/UI).
@@ -90,24 +100,39 @@ fn reconcile_segments(
     let mut segs: Vec<&CompletedSegment> = completed.iter().collect();
     segs.sort_by_key(|s| s.index);
 
+    // Уже зафиксированные сегменты по индексу. Финализированный сегмент
+    // неизменяем, поэтому повторно его не хешируем (хеширование — самая дорогая
+    // часть реконсиляции): SHA-256 считаем только для НОВЫХ сегментов, для
+    // известных переиспользуем сохранённое звено хеш-цепочки.
+    let known: std::collections::HashMap<u32, String> = store
+        .get_segments(session_id)?
+        .into_iter()
+        .map(|s| (s.index, s.chain_link))
+        .collect();
+
     let mut prev_link: Option<String> = None;
     for seg in segs {
-        let path = resolve_path(dir, &seg.path);
-        let sha256 = hash::sha256_file(&path)?;
-        let chain_link = hash::chain_link(prev_link.as_deref(), &sha256);
-        let size_bytes = std::fs::metadata(&path)?.len();
-        store.append_segment(
-            session_id,
-            &SegmentRecord {
-                index: seg.index,
-                path: path.to_string_lossy().into_owned(),
-                started_at_unix_ms: 0, // журнал не хранит таймкод сегмента (этап 02)
-                frames: seg.frames,
-                size_bytes,
-                sha256,
-                chain_link: chain_link.clone(),
-            },
-        )?;
+        let chain_link = if let Some(link) = known.get(&seg.index) {
+            link.clone()
+        } else {
+            let path = resolve_path(dir, &seg.path);
+            let sha256 = hash::sha256_file(&path)?;
+            let chain_link = hash::chain_link(prev_link.as_deref(), &sha256);
+            let size_bytes = std::fs::metadata(&path)?.len();
+            store.append_segment(
+                session_id,
+                &SegmentRecord {
+                    index: seg.index,
+                    path: path.to_string_lossy().into_owned(),
+                    started_at_unix_ms: 0, // журнал не хранит таймкод сегмента (этап 02)
+                    frames: seg.frames,
+                    size_bytes,
+                    sha256,
+                    chain_link: chain_link.clone(),
+                },
+            )?;
+            chain_link
+        };
         prev_link = Some(chain_link);
     }
 
@@ -282,5 +307,53 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = ManifestStore::in_memory().unwrap();
         assert!(reconcile_session(&store, tmp.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn terminal_session_not_rehashed_on_repeat() {
+        // Завершённая сессия с тем же числом сегментов при повторной
+        // реконсиляции не перехешируется (быстрый показ списка/диагностики).
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, files) = build_session_dir(tmp.path(), "sess-1", true);
+        let store = ManifestStore::in_memory().unwrap();
+        reconcile_session(&store, &dir).unwrap();
+        let before = store.get_segments("sess-1").unwrap();
+
+        // Портим файл сегмента на диске: повторный прогон не должен его читать.
+        std::fs::write(dir.join(&files[0]), b"tampered bytes on disk").unwrap();
+        reconcile_session(&store, &dir).unwrap();
+        let after = store.get_segments("sess-1").unwrap();
+        assert_eq!(before, after, "хеши терминальной сессии не пересчитываются");
+    }
+
+    #[test]
+    fn active_session_rehashes_only_new_segments() {
+        // Незавершённая (recording) сессия: known-сегменты не перехешируются,
+        // новый сегмент — добавляется с пересчётом цепочки.
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, files) = build_session_dir(tmp.path(), "sess-1", false);
+        let store = ManifestStore::in_memory().unwrap();
+        reconcile_session(&store, &dir).unwrap();
+        let seg1_before = store.get_segments("sess-1").unwrap()[0].clone();
+
+        // Портим уже известный сегмент 1 и дописываем новый сегмент 3.
+        std::fs::write(dir.join(&files[0]), b"tampered bytes on disk").unwrap();
+        let (name3, frames3) = write_segment(&dir, 300);
+        let mut journal = Journal::open(&dir).unwrap();
+        journal
+            .append(&JournalRecord::SegmentCompleted {
+                index: 3,
+                path: name3,
+                frames: frames3,
+            })
+            .unwrap();
+
+        reconcile_session(&store, &dir).unwrap();
+        let segs = store.get_segments("sess-1").unwrap();
+        // Сегмент 1 не перехеширован (порча файла не повлияла на манифест)…
+        assert_eq!(segs[0], seg1_before);
+        // …а новый сегмент 3 добавлен.
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[2].index, 3);
     }
 }

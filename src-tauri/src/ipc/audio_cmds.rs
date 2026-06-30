@@ -176,6 +176,14 @@ pub fn stop_capture(
 
     emit_state(&app, "stopping");
     let segments = active.session.stop().map_err(|e| e.to_string())?;
+    // Фиксируем штатное завершение в журнале (write-ahead): без этой записи
+    // реконсиляция считает сессию незавершённой и оставляет статус «recording».
+    // Потоки записи уже остановлены (session.stop их join'ит), журнал свободен.
+    {
+        let mut j = Journal::open(&active.output_dir).map_err(|e| e.to_string())?;
+        j.append(&JournalRecord::Stopped)
+            .map_err(|e| e.to_string())?;
+    }
     emit_state(&app, "stopped");
     Ok(segments
         .into_iter()

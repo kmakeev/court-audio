@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Field, Tag } from '../design';
+import { Button, Checkbox, Field, Tag } from '../design';
 import {
   getCaseCacheStatus,
   searchCases,
@@ -124,18 +124,20 @@ export function CasePicker({ binding, onChange }: CasePickerProps) {
       .finally(() => setSyncing(false));
   }, []);
 
-  const switchToManual = useCallback(() => {
-    setMode('manual');
-    setOpen(false);
-    onChange(null);
-    applyManual(manualNumber, manualFio);
-  }, [applyManual, manualNumber, manualFio, onChange]);
-
-  const switchToCache = useCallback(() => {
-    setMode('cache');
-    onChange(null);
-    setQuery('');
-  }, [onChange]);
+  const toggleManual = useCallback(
+    (manual: boolean) => {
+      onChange(null);
+      if (manual) {
+        setMode('manual');
+        setOpen(false);
+        applyManual(manualNumber, manualFio);
+      } else {
+        setMode('cache');
+        setQuery('');
+      }
+    },
+    [applyManual, manualNumber, manualFio, onChange],
+  );
 
   return (
     <div style={{ marginTop: 12, maxWidth: 460 }}>
@@ -165,22 +167,15 @@ export function CasePicker({ binding, onChange }: CasePickerProps) {
         <p style={{ fontSize: 12, color: 'var(--muted)', margin: '0 0 12px' }}>{syncNote}</p>
       )}
 
-      {/* Переключатель режима. */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        <Button
-          variant={mode === 'cache' ? 'primary' : 'link'}
-          onClick={switchToCache}
-          disabled={mode === 'cache'}
+      {/* Режим привязки: по умолчанию поиск по кэшу; чекбокс — фолбэк на
+          ручной ввод (дела нет в кэше / станция оффлайн без кэша). */}
+      <div style={{ marginBottom: 12 }}>
+        <Checkbox
+          checked={mode === 'manual'}
+          onChange={(e) => toggleManual(e.target.checked)}
         >
-          Из кэша дел
-        </Button>
-        <Button
-          variant={mode === 'manual' ? 'primary' : 'link'}
-          onClick={switchToManual}
-          disabled={mode === 'manual'}
-        >
-          Ввести вручную
-        </Button>
+          Дела нет в кэше — ввести № вручную
+        </Checkbox>
       </div>
 
       {mode === 'cache' ? (
