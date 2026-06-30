@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager};
 use crate::settings::Settings;
 
 pub mod audio_cmds;
+pub mod case_cmds;
 pub mod query_cmds;
 
 /// Имя файла настроек в каталоге конфигурации приложения.

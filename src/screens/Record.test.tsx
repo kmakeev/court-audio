@@ -19,6 +19,15 @@ function wireDefaults(recoverable: unknown[] = []) {
   }));
   setInvoke('start_monitor', () => undefined);
   setInvoke('stop_monitor', () => undefined);
+  // Этап 05 — пикер дела на экране «Запись».
+  setInvoke('get_case_cache_status', () => ({
+    synced_at_unix_ms: null,
+    is_fresh: false,
+    record_count: 0,
+    scope: 'court_docket',
+  }));
+  setInvoke('search_cases', () => []);
+  setInvoke('bind_session_case', () => undefined);
 }
 
 function renderRecord() {
@@ -164,5 +173,40 @@ describe('RecordScreen', () => {
     );
     expect(screen.getByText('Продолжить')).toBeInTheDocument();
     expect(screen.getByText('Закрыть')).toBeInTheDocument();
+  });
+
+  it('привязывает дело к стартовавшей сессии (ручной ввод → bind_session_case)', async () => {
+    wireDefaults();
+    const bind = vi.fn();
+    setInvoke('start_capture', () => ({
+      sample_rate_hz: 44100,
+      channels: 1,
+      output_dir: '/data/recordings/session-new',
+    }));
+    setInvoke('bind_session_case', (args) => {
+      bind(args);
+      return undefined;
+    });
+    renderRecord();
+    await screen.findByText('Готов к записи');
+
+    // Ручной ввод № дела в пикере.
+    fireEvent.click(await screen.findByText('Ввести вручную'));
+    act(() => {
+      fireEvent.change(screen.getByLabelText('№ дела'), {
+        target: { value: '№ 7-7/2026' },
+      });
+    });
+
+    // Старт записи привязывает выбранное дело к новой сессии.
+    fireEvent.click(screen.getByText('● Старт записи'));
+    await waitFor(() => expect(bind).toHaveBeenCalled());
+    const arg = bind.mock.calls[0][0] as {
+      dir: string;
+      binding: { kind: string; raw_number: string };
+    };
+    expect(arg.dir).toBe('/data/recordings/session-new');
+    expect(arg.binding.kind).toBe('manual');
+    expect(arg.binding.raw_number).toBe('№ 7-7/2026');
   });
 });

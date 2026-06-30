@@ -188,6 +188,65 @@ export function listSessions(): Promise<SessionView[]> {
   return invoke<SessionView[]>('list_sessions');
 }
 
+// ── Привязка к делу (этап 05: store::case_binding / store::case_cache) ──────
+
+/** Состояние привязки (store::case_binding::BindingKind). */
+export type BindingKind = 'resolved' | 'manual';
+
+/**
+ * Привязка записи к делу. `resolved` — выбрано дело из кэша (есть
+ * `adjudication_id`); `manual` (pending) — ручной ввод № (+опц. ФИО), сервер
+ * свяжет позже. Сериализуется в JSON и пишется в `adjudication_ref` манифеста.
+ */
+export interface AdjudicationRef {
+  kind: BindingKind;
+  adjudication_id?: string;
+  raw_number?: string;
+  raw_fio?: string;
+}
+
+/** Дело из кэша докета (store::case_cache::CaseRecord) — минимум полей ПДн. */
+export interface CaseRecord {
+  id: string;
+  number: string;
+  fio: string;
+  date: string;
+}
+
+/** Свежесть/объём кэша дел (ipc::case_cmds::CaseCacheStatus). */
+export interface CaseCacheStatus {
+  synced_at_unix_ms: number | null;
+  is_fresh: boolean;
+  record_count: number;
+  scope: string;
+}
+
+/** Оффлайн-поиск дел в локальном кэше (автокомплит пикера). */
+export function searchCases(query: string): Promise<CaseRecord[]> {
+  return invoke<CaseRecord[]>('search_cases', { query });
+}
+
+/** Свежесть и объём кэша дел для индикатора пикера. */
+export function getCaseCacheStatus(): Promise<CaseCacheStatus> {
+  return invoke<CaseCacheStatus>('get_case_cache_status');
+}
+
+/**
+ * Синхронизировать кэш дел из докета `ex_system`. В этапе 05 транспорта ещё нет
+ * (HTTP — 06, slim-эндпоинт/авторизация — 07): команда отклоняется с пояснением.
+ */
+export function syncCaseCache(): Promise<CaseCacheStatus> {
+  return invoke<CaseCacheStatus>('sync_case_cache');
+}
+
+/** Привязать/уточнить/снять (`null`) дело у записи в каталоге `dir`. */
+export function bindSessionCase(
+  dir: string,
+  binding: AdjudicationRef | null,
+): Promise<void> {
+  return invoke('bind_session_case', { dir, binding });
+}
+
 // ── Диагностика (ipc::query_cmds::DiagnosticsInfo) ──────────────────────────
 
 export type DiskStatusCode = 'ok' | 'low' | 'critical';

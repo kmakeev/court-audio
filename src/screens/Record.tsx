@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
-import { BlockHead, Button, Card, CriticalNotice, Field, Select, Tag } from '../design';
+import { BlockHead, Button, Card, CriticalNotice, Select, Tag } from '../design';
+import { CasePicker } from '../components/CasePicker';
 import { ConfirmDialog } from '../shell/ConfirmDialog';
 import {
+  bindSessionCase,
   discardSession,
   getCaptureStatus,
   listAudioDevices,
@@ -17,6 +19,7 @@ import {
   startMonitor,
   stopCapture,
   stopMonitor,
+  type AdjudicationRef,
   type CaptureStateValue,
   type ChannelLevel,
   type DeviceInfo,
@@ -42,6 +45,9 @@ const METER_FLOOR_DBFS = -60;
 const CLOCK_TICK_MS = 1000;
 // Период опроса состояния захвата (живой счётчик сегментов) — отображение.
 const STATUS_POLL_MS = 3000;
+// Дебаунс записи изменённой привязки к делу в манифест во время записи — чтобы
+// ввод не порождал команду на каждый символ. Косметика взаимодействия.
+const BIND_DEBOUNCE_MS = 500;
 
 // Читаемая нейтральная кнопка на светлом фоне: вариант `secondary` из DS
 // рассчитан на тёмную шапку (светлый текст), поэтому переопределяем токенами.
@@ -78,7 +84,9 @@ export function RecordScreen() {
   const [level, setLevel] = useState<LevelEvent>({ channels: [] });
   const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [caseRef, setCaseRef] = useState('');
+  // Привязка к делу (этап 05): `resolved` из кэша или `manual` (pending).
+  // Запись не блокируется её отсутствием — можно привязать позже.
+  const [binding, setBinding] = useState<AdjudicationRef | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Готовность первичной загрузки (чтобы мониторинг не стартовал до резолва).
   const [loaded, setLoaded] = useState(false);
@@ -219,6 +227,20 @@ export function RecordScreen() {
     };
   }, [state]);
 
+  // Уточнение/смена привязки уже идущей записи: при изменении привязки во время
+  // активной сессии дебаунсим и пишем в манифест (без спама на каждый символ).
+  const activeOutputDir = sessionInfo?.output_dir ?? null;
+  useEffect(() => {
+    if (state !== 'recording' && state !== 'paused') return;
+    if (!activeOutputDir) return;
+    const id = window.setTimeout(() => {
+      bindSessionCase(activeOutputDir, binding).catch((e: unknown) =>
+        setError(describeError(e)),
+      );
+    }, BIND_DEBOUNCE_MS);
+    return () => window.clearTimeout(id);
+  }, [binding, state, activeOutputDir]);
+
   const onStart = useCallback(async () => {
     setError(null);
     setElapsedSec(0);
@@ -230,11 +252,18 @@ export function RecordScreen() {
       const started = await startCapture();
       setState('recording');
       setSessionInfo({ output_dir: started.output_dir, segment_count: 0 });
+      // Привязываем выбранное дело к стартовавшей сессии (ошибка привязки не
+      // должна валить запись — её можно повторить/уточнить).
+      if (binding) {
+        bindSessionCase(started.output_dir, binding).catch((e: unknown) =>
+          setError(describeError(e)),
+        );
+      }
     } catch (e) {
       setStartedAtMs(null);
       setError(describeError(e));
     }
-  }, []);
+  }, [binding]);
 
   const onStop = useCallback(async () => {
     try {
@@ -476,16 +505,18 @@ export function RecordScreen() {
         <BlockHead
           numeral="B"
           title="Привязка к делу"
-          hint="№ дела / ФИО — пока ручной ввод (кэш дел подключится на этапе 05)"
+          hint="Выберите дело из кэша докета (оффлайн) или введите № вручную"
         />
-        <div style={{ marginTop: 12, maxWidth: 420 }}>
-          <Field
-            label="Дело / стороны"
-            placeholder="напр. № 1-123/2026, Иванов И.И."
-            value={caseRef}
-            onChange={(e) => setCaseRef(e.target.value)}
-          />
-        </div>
+        <CasePicker binding={binding} onChange={setBinding} />
+        {isActive && !binding && (
+          <p
+            aria-live="polite"
+            style={{ fontSize: 12, color: 'var(--accent-deep)', margin: '12px 0 0' }}
+          >
+            ⚠ Запись идёт без привязки к делу — привяжите дело, чтобы запись
+            связалась с производством на сервере.
+          </p>
+        )}
       </Card>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
