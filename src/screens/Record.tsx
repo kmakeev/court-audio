@@ -48,6 +48,10 @@ const STATUS_POLL_MS = 3000;
 // Дебаунс записи изменённой привязки к делу в манифест во время записи — чтобы
 // ввод не порождал команду на каждый символ. Косметика взаимодействия.
 const BIND_DEBOUNCE_MS = 500;
+// Минимальное время показа индикатора «Сохранение записи…»: короткие записи
+// финализируются мгновенно, и без этого порога подтверждение мелькнуло бы
+// незаметно. Только отображение, не бизнес-параметр реестра.
+const STOP_INDICATOR_MIN_MS = 700;
 
 // Читаемая нейтральная кнопка на светлом фоне: вариант `secondary` из DS
 // рассчитан на тёмную шапку (светлый текст), поэтому переопределяем токенами.
@@ -274,14 +278,19 @@ export function RecordScreen() {
     // финализация (сброс/хеши/журнал) может заблокировать поток, и без
     // гарантированной отрисовки индикатор не успел бы проявиться.
     await nextPaint();
+    const startedAt = Date.now();
     try {
       await stopCapture();
+      // Короткие записи финализируются мгновенно — держим индикатор минимум
+      // заметное время, иначе оператор не успевает увидеть подтверждение.
+      await holdAtLeast(startedAt, STOP_INDICATOR_MIN_MS);
       setState('stopped');
       setStartedAtMs(null);
       setSessionInfo(null);
       setLevel({ channels: [] });
     } catch (e) {
       // Стоп забрал сессию из состояния ядра — активной записи уже нет.
+      await holdAtLeast(startedAt, STOP_INDICATOR_MIN_MS);
       setState('stopped');
       setStartedAtMs(null);
       setSessionInfo(null);
@@ -769,6 +778,14 @@ function nextPaint(): Promise<void> {
     }
     setTimeout(done, 32);
   });
+}
+
+// Подождать, пока с момента `startedAt` пройдёт хотя бы `minMs` (минимальная
+// видимость индикатора). Если время уже вышло — не ждём.
+function holdAtLeast(startedAt: number, minMs: number): Promise<void> {
+  const remaining = minMs - (Date.now() - startedAt);
+  if (remaining <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
 function describeError(e: unknown): string {
