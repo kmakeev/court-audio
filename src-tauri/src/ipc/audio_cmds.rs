@@ -116,13 +116,15 @@ pub fn start_capture(
     });
 
     let app_for_warn = app.clone();
-    let on_event: crate::audio::capture::ReliabilityCallback = Arc::new(move |ev: ReliabilityEvent| {
-        let _ = app_for_warn.emit(EVENT_RELIABILITY_WARNING, ev);
-    });
+    let on_event: crate::audio::capture::ReliabilityCallback =
+        Arc::new(move |ev: ReliabilityEvent| {
+            let _ = app_for_warn.emit(EVENT_RELIABILITY_WARNING, ev);
+        });
 
     let reliability = build_reliability(&settings, &storage_root, Arc::clone(&journal), on_event);
 
-    let session = CaptureSession::start(params, level_cb, reliability).map_err(|e| e.to_string())?;
+    let session =
+        CaptureSession::start(params, level_cb, reliability).map_err(|e| e.to_string())?;
     let native = session.native_format();
     *guard = Some(session);
     drop(guard);

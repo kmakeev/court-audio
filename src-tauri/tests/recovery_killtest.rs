@@ -12,7 +12,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use court_audio_lib::audio::capture::{run_consumer, ConsumerConfig, ConsumerReliability, LevelEvent};
+use court_audio_lib::audio::capture::{
+    run_consumer, ConsumerConfig, ConsumerReliability, LevelEvent,
+};
 use court_audio_lib::audio::ring;
 use court_audio_lib::recorder::journal::{self, Journal, JournalRecord};
 use court_audio_lib::recorder::recovery::{self, RepairOutcome};
@@ -71,14 +73,7 @@ fn killtest_recovers_unfinished_session() {
     };
 
     let stop = Arc::new(AtomicBool::new(true));
-    let segments = run_consumer(
-        consumer,
-        cfg,
-        Box::new(|_: LevelEvent| {}),
-        stop,
-        rel,
-    )
-    .unwrap();
+    let segments = run_consumer(consumer, cfg, Box::new(|_: LevelEvent| {}), stop, rel).unwrap();
     assert_eq!(segments.len(), 3, "ожидаем seg1, seg2 и частичный seg3");
 
     // Журнал зафиксировал завершение двух сегментов, закрытых ротацией.

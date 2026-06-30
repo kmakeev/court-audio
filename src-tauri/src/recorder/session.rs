@@ -208,10 +208,16 @@ mod tests {
     #[test]
     fn full_record_pause_resume_stop_cycle() {
         let mut m = SessionMachine::new();
-        assert_eq!(m.apply(SessionEvent::Start).unwrap(), SessionState::Recording);
+        assert_eq!(
+            m.apply(SessionEvent::Start).unwrap(),
+            SessionState::Recording
+        );
         assert_eq!(m.apply(SessionEvent::Pause).unwrap(), SessionState::Paused);
         assert_eq!(m.pause_reason(), Some(PauseReason::Operator));
-        assert_eq!(m.apply(SessionEvent::Resume).unwrap(), SessionState::Recording);
+        assert_eq!(
+            m.apply(SessionEvent::Resume).unwrap(),
+            SessionState::Recording
+        );
         assert_eq!(
             m.apply(SessionEvent::RequestStop).unwrap(),
             SessionState::Stopping

@@ -29,10 +29,9 @@ impl Mirror {
     /// Скопировать завершённый сегмент на зеркало. Best-effort: возвращаемую
     /// ошибку вызывающий только логирует, основная дорожка не страдает.
     pub fn mirror_segment(&self, segment: &SegmentInfo) -> std::io::Result<u64> {
-        let file_name = segment
-            .path
-            .file_name()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "нет имени файла"))?;
+        let file_name = segment.path.file_name().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "нет имени файла")
+        })?;
         let dst = self.dir.join(file_name);
         std::fs::copy(&segment.path, &dst)
     }

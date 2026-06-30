@@ -40,7 +40,11 @@ pub enum JournalRecord {
         started_at_unix_ms: u64,
     },
     /// Сегмент финализирован (известна длина в кадрах).
-    SegmentCompleted { index: u32, path: String, frames: u64 },
+    SegmentCompleted {
+        index: u32,
+        path: String,
+        frames: u64,
+    },
     /// Пауза (с причиной — operator/device_lost).
     Paused { reason: String },
     /// Возобновление после паузы.

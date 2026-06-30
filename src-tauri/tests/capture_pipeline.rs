@@ -10,7 +10,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use court_audio_lib::audio::capture::{run_consumer, ConsumerConfig, ConsumerReliability, LevelEvent};
+use court_audio_lib::audio::capture::{
+    run_consumer, ConsumerConfig, ConsumerReliability, LevelEvent,
+};
 use court_audio_lib::audio::ring;
 
 /// Эталонное квантование (зеркало `convert::quantize_i16`) для сверки данных.
@@ -51,7 +53,8 @@ fn mono_capture_produces_valid_continuous_segments() {
     // Останавливаем заранее: consumer сольёт буфер и завершится.
     let stop = Arc::new(AtomicBool::new(true));
     let level_cb = Box::new(|_: LevelEvent| {});
-    let segments = run_consumer(consumer, cfg, level_cb, stop, ConsumerReliability::none()).unwrap();
+    let segments =
+        run_consumer(consumer, cfg, level_cb, stop, ConsumerReliability::none()).unwrap();
 
     // Три сегмента: 8000 + 8000 + 4000 кадров, без потерь/наложений.
     assert_eq!(segments.len(), 3);
@@ -115,7 +118,8 @@ fn stereo_input_is_downmixed_to_mono() {
 
     let stop = Arc::new(AtomicBool::new(true));
     let level_cb = Box::new(|_: LevelEvent| {});
-    let segments = run_consumer(consumer, cfg, level_cb, stop, ConsumerReliability::none()).unwrap();
+    let segments =
+        run_consumer(consumer, cfg, level_cb, stop, ConsumerReliability::none()).unwrap();
 
     let total: u32 = segments
         .iter()

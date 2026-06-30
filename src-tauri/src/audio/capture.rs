@@ -285,7 +285,15 @@ impl CaptureSession {
         let stop_for_thread = Arc::clone(&writer_stop);
         let writer_handle = thread::Builder::new()
             .name("audio-writer".into())
-            .spawn(move || run_consumer(consumer, consumer_cfg, level_cb, stop_for_thread, consumer_rel))
+            .spawn(move || {
+                run_consumer(
+                    consumer,
+                    consumer_cfg,
+                    level_cb,
+                    stop_for_thread,
+                    consumer_rel,
+                )
+            })
             .map_err(|e| AudioError::Stream(e.to_string()))?;
 
         // Supervisor (watchdog + монитор устройства) — только если задан интервал.
@@ -566,10 +574,18 @@ fn build_stream_and_ring(
     let (producer, consumer) = ring::channel(capacity.max(1));
 
     let stream = match sample_format {
-        SampleFormat::I16 => build_input_stream::<i16>(&device, &config, producer, heartbeat, err_tx),
-        SampleFormat::U16 => build_input_stream::<u16>(&device, &config, producer, heartbeat, err_tx),
-        SampleFormat::I32 => build_input_stream::<i32>(&device, &config, producer, heartbeat, err_tx),
-        SampleFormat::F32 => build_input_stream::<f32>(&device, &config, producer, heartbeat, err_tx),
+        SampleFormat::I16 => {
+            build_input_stream::<i16>(&device, &config, producer, heartbeat, err_tx)
+        }
+        SampleFormat::U16 => {
+            build_input_stream::<u16>(&device, &config, producer, heartbeat, err_tx)
+        }
+        SampleFormat::I32 => {
+            build_input_stream::<i32>(&device, &config, producer, heartbeat, err_tx)
+        }
+        SampleFormat::F32 => {
+            build_input_stream::<f32>(&device, &config, producer, heartbeat, err_tx)
+        }
         other => Err(AudioError::UnsupportedFormat(format!("{other:?}"))),
     }?;
 
@@ -696,7 +712,10 @@ pub fn run_consumer(
                 });
                 if let Some(mirror) = &rel.mirror {
                     if let Err(e) = mirror.mirror_segment(&seg) {
-                        eprintln!("[reliability] зеркалирование {:?} не удалось: {e}", seg.path);
+                        eprintln!(
+                            "[reliability] зеркалирование {:?} не удалось: {e}",
+                            seg.path
+                        );
                     }
                 }
                 // Контроль диска с шагом «сегмент» (config-derived cadence).

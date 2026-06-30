@@ -19,7 +19,9 @@ use court_audio_lib::audio::capture::{
 use court_audio_lib::audio::ring;
 use court_audio_lib::recorder::journal::{self, Journal, JournalRecord};
 use court_audio_lib::recorder::session::{SessionEvent, SessionMachine, SessionState};
-use court_audio_lib::reliability::device_monitor::{apply_device_event, DeviceEvent, DeviceMonitor};
+use court_audio_lib::reliability::device_monitor::{
+    apply_device_event, DeviceEvent, DeviceMonitor,
+};
 use court_audio_lib::reliability::disk_monitor::DiskThresholds;
 use court_audio_lib::reliability::watchdog::{is_stalled, now_unix_ms, Heartbeat};
 
@@ -78,8 +80,14 @@ fn disk_critical_triggers_clean_stop_without_data_loss() {
 
     // stop=false: остановка должна прийти именно от критического порога диска.
     let stop = Arc::new(AtomicBool::new(false));
-    let segments = run_consumer(consumer, base_cfg(session.clone(), rate, total_frames + 16), Box::new(|_: LevelEvent| {}), stop, rel)
-        .unwrap();
+    let segments = run_consumer(
+        consumer,
+        base_cfg(session.clone(), rate, total_frames + 16),
+        Box::new(|_: LevelEvent| {}),
+        stop,
+        rel,
+    )
+    .unwrap();
 
     // Данные целы: всё записанное до стопа финализировано, сумма кадров сохранена.
     assert!(!segments.is_empty());
@@ -116,17 +124,21 @@ fn segments_are_mirrored_to_second_storage() {
 
     let rel = ConsumerReliability {
         journal: None,
-        mirror: Some(
-            court_audio_lib::reliability::mirror::Mirror::new(&mirror_dir).unwrap(),
-        ),
+        mirror: Some(court_audio_lib::reliability::mirror::Mirror::new(&mirror_dir).unwrap()),
         disk: None,
         max_session: None,
         on_event: None,
     };
 
     let stop = Arc::new(AtomicBool::new(true));
-    let segments = run_consumer(consumer, base_cfg(session.clone(), rate, total_frames + 16), Box::new(|_: LevelEvent| {}), stop, rel)
-        .unwrap();
+    let segments = run_consumer(
+        consumer,
+        base_cfg(session.clone(), rate, total_frames + 16),
+        Box::new(|_: LevelEvent| {}),
+        stop,
+        rel,
+    )
+    .unwrap();
 
     // Зеркалируются завершённые ротацией сегменты (последний партиал — нет).
     let mirrored: Vec<_> = std::fs::read_dir(&mirror_dir)
