@@ -39,6 +39,19 @@ pub enum UploadOutcome {
     IntegrityFailed,
 }
 
+/// Идентичность для регистрации сессии: значение из записи, иначе — из env
+/// (временный seam до экрана входа оператора). Пустая env-переменная
+/// игнорируется. См. [`super::OPERATOR_ID_ENV`] / [`super::STATION_ID_ENV`].
+fn identity_or_env(value: &str, env_key: &str) -> String {
+    if !value.is_empty() {
+        return value.to_string();
+    }
+    std::env::var(env_key)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_default()
+}
+
 /// Выгрузить запись `session_id` за один проход. `token = None` → [`SyncError::NoToken`]
 /// (копим в очереди, не теряем). `key` — ключ станции для дешифрования сегментов
 /// (нужен только для `.enc`). `now_unix_ms` — часы для триггера ретеншна.
@@ -78,8 +91,11 @@ pub fn upload_session(
         None => {
             let meta = SessionMeta {
                 session_id: session.id.clone(),
-                station_id: session.station_id.clone(),
-                operator_id: session.operator_id.clone(),
+                // До экрана входа оператора идентичность пустая в записи сессии
+                // (reconcile), поэтому добираем её из env (как и токен). Сервер
+                // `07` требует числовой operator_id (PK пользователя ex_system).
+                station_id: identity_or_env(&session.station_id, super::STATION_ID_ENV),
+                operator_id: identity_or_env(&session.operator_id, super::OPERATOR_ID_ENV),
                 adjudication_ref: session.adjudication_ref.clone(),
                 sample_rate_hz: session.sample_rate_hz,
                 channels: session.channels,
@@ -252,6 +268,20 @@ mod tests {
     use crate::store::manifest::{SegmentRecord, SessionRecord, SessionStatus};
     use crate::sync::testkit::{FakeConfig, FakeTransport};
     use std::fs;
+
+    #[test]
+    fn identity_prefers_value_then_env() {
+        // Уникальный ключ env, чтобы не пересекаться с другими тестами.
+        let key = "COURT_AUDIO_TEST_OPERATOR_ID_XYZ";
+        // Непустое значение записи — env не трогаем.
+        assert_eq!(identity_or_env("op-7", key), "op-7");
+        // Пусто в записи → берём из env.
+        std::env::set_var(key, "42");
+        assert_eq!(identity_or_env("", key), "42");
+        // Нет env → пусто (сервер тогда корректно отклонит 400).
+        std::env::remove_var(key);
+        assert_eq!(identity_or_env("", key), "");
+    }
 
     /// Подготовить запись с `n` сегментами на диске (без шифрования) + манифест.
     fn seed_recording(dir: &Path, n: u32) -> ManifestStore {

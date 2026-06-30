@@ -32,6 +32,14 @@ use client::{ErrorKind, TransportError};
 /// настройка-тюнинг, а seam идентичности — секрет в settings.json не хранится.
 pub const OPERATOR_TOKEN_ENV: &str = "COURT_AUDIO_OPERATOR_TOKEN";
 
+/// Env-переменные идентичности станции/оператора — временный источник до
+/// экрана входа оператора (login-UI). Запись сессии до входа заводится с
+/// пустыми `station_id`/`operator_id` (reconcile), а сервер `07` требует
+/// **числовой** `operator_id` (PK пользователя ex_system). Эти переменные
+/// заполняют пустые значения при регистрации сессии (`upload_session`).
+pub const OPERATOR_ID_ENV: &str = "COURT_AUDIO_OPERATOR_ID";
+pub const STATION_ID_ENV: &str = "COURT_AUDIO_STATION_ID";
+
 /// Ошибка агента выгрузки. Делит сетевые сбои на временные (ретраить) и
 /// постоянные (4xx — не ретраить), плюс отсутствие токена и ошибки стора.
 #[derive(Debug)]
