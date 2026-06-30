@@ -93,6 +93,18 @@ export function resumeCapture(): Promise<void> {
   return invoke('resume_capture');
 }
 
+/** Текущее состояние захвата для восстановления статуса UI после перехода. */
+export interface CaptureStatus {
+  state: 'idle' | 'recording' | 'paused';
+  started_at_unix_ms: number | null;
+  output_dir: string | null;
+  segment_count: number;
+}
+
+export function getCaptureStatus(): Promise<CaptureStatus> {
+  return invoke<CaptureStatus>('capture_status');
+}
+
 export function scanRecoverable(): Promise<RecoverableSession[]> {
   return invoke<RecoverableSession[]>('scan_recoverable');
 }

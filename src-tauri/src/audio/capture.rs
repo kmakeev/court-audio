@@ -332,6 +332,11 @@ impl CaptureSession {
         self.native
     }
 
+    /// На паузе ли захват (для восстановления статуса в UI — этап 04).
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Acquire)
+    }
+
     /// Поставить захват на паузу (устройство остаётся открытым).
     pub fn pause(&self) -> Result<(), AudioError> {
         // Помечаем паузу до отправки команды: watchdog не должен принять

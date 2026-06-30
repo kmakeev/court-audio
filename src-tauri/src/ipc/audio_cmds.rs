@@ -29,9 +29,18 @@ use crate::recorder::recovery;
 use crate::reliability::disk_monitor::DiskThresholds;
 use crate::settings::Settings;
 
+/// Активная сессия захвата + её метаданные для восстановления статуса в UI
+/// (этап 04): без них UI после перехода между вкладками не знал бы, что запись
+/// продолжается в фоне.
+pub struct ActiveSession {
+    pub session: CaptureSession,
+    pub started_at_unix_ms: u64,
+    pub output_dir: PathBuf,
+}
+
 /// Управляемое Tauri состояние активной сессии захвата.
 #[derive(Default)]
-pub struct CaptureState(pub Mutex<Option<CaptureSession>>);
+pub struct CaptureState(pub Mutex<Option<ActiveSession>>);
 
 /// Ответ `start_capture`: фактический формат и каталог сессии.
 #[derive(Debug, Clone, Serialize)]
@@ -95,10 +104,10 @@ pub fn start_capture(
     let params = build_params(&settings, output_dir.clone());
 
     // Журнал сессии (write-ahead): открываем до старта, сразу пишем SessionStarted.
+    let started_at_unix_ms = now_unix_ms();
     let journal = Journal::open(&output_dir).map_err(|e| e.to_string())?;
     let journal = Arc::new(Mutex::new(journal));
     {
-        let started_at_unix_ms = now_unix_ms();
         let mut g = journal.lock().map_err(|_| "журнал повреждён".to_string())?;
         g.append(&JournalRecord::SessionStarted {
             started_at_unix_ms,
@@ -126,7 +135,11 @@ pub fn start_capture(
     let session =
         CaptureSession::start(params, level_cb, reliability).map_err(|e| e.to_string())?;
     let native = session.native_format();
-    *guard = Some(session);
+    *guard = Some(ActiveSession {
+        session,
+        started_at_unix_ms,
+        output_dir: output_dir.clone(),
+    });
     drop(guard);
 
     emit_state(&app, "recording");
@@ -143,7 +156,7 @@ pub fn stop_capture(
     app: AppHandle,
     state: State<'_, CaptureState>,
 ) -> Result<Vec<SegmentSummary>, String> {
-    let session = {
+    let active = {
         let mut guard = state
             .0
             .lock()
@@ -154,7 +167,7 @@ pub fn stop_capture(
     };
 
     emit_state(&app, "stopping");
-    let segments = session.stop().map_err(|e| e.to_string())?;
+    let segments = active.session.stop().map_err(|e| e.to_string())?;
     emit_state(&app, "stopped");
     Ok(segments
         .into_iter()
@@ -176,10 +189,10 @@ pub fn pause_capture(app: AppHandle, state: State<'_, CaptureState>) -> Result<(
             .0
             .lock()
             .map_err(|_| "состояние захвата повреждено".to_string())?;
-        let session = guard
+        let active = guard
             .as_ref()
             .ok_or_else(|| "запись не запущена".to_string())?;
-        session.pause().map_err(|e| e.to_string())?;
+        active.session.pause().map_err(|e| e.to_string())?;
     }
     emit_state(&app, "paused");
     Ok(())
@@ -193,13 +206,68 @@ pub fn resume_capture(app: AppHandle, state: State<'_, CaptureState>) -> Result<
             .0
             .lock()
             .map_err(|_| "состояние захвата повреждено".to_string())?;
-        let session = guard
+        let active = guard
             .as_ref()
             .ok_or_else(|| "запись не запущена".to_string())?;
-        session.resume().map_err(|e| e.to_string())?;
+        active.session.resume().map_err(|e| e.to_string())?;
     }
     emit_state(&app, "recording");
     Ok(())
+}
+
+/// Текущее состояние захвата — чтобы UI восстанавливал статус после перехода
+/// между вкладками (запись продолжается в фоне; компонент экрана размонтируется
+/// и теряет локальное состояние). Этап 04.
+#[derive(Debug, Clone, Serialize)]
+pub struct CaptureStatus {
+    /// `idle` / `recording` / `paused`.
+    pub state: &'static str,
+    pub started_at_unix_ms: Option<u64>,
+    pub output_dir: Option<String>,
+    /// Сколько сегментов уже записано на диск (живой счётчик прогресса).
+    pub segment_count: u32,
+}
+
+/// Вернуть текущее состояние активной сессии (или `idle`).
+#[tauri::command]
+pub fn capture_status(state: State<'_, CaptureState>) -> Result<CaptureStatus, String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|_| "состояние захвата повреждено".to_string())?;
+    match guard.as_ref() {
+        None => Ok(CaptureStatus {
+            state: "idle",
+            started_at_unix_ms: None,
+            output_dir: None,
+            segment_count: 0,
+        }),
+        Some(active) => Ok(CaptureStatus {
+            state: if active.session.is_paused() {
+                "paused"
+            } else {
+                "recording"
+            },
+            started_at_unix_ms: Some(active.started_at_unix_ms),
+            output_dir: Some(active.output_dir.to_string_lossy().into_owned()),
+            segment_count: count_segments(&active.output_dir),
+        }),
+    }
+}
+
+/// Подсчитать записанные WAV-сегменты в каталоге сессии (`seg-NNNN-….wav`).
+fn count_segments(dir: &std::path::Path) -> u32 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("seg-") && n.ends_with(".wav"))
+        })
+        .count() as u32
 }
 
 /// Найти незавершённые сессии (для UI восстановления при старте приложения).

@@ -11,6 +11,12 @@ function wireDefaults(recoverable: unknown[] = []) {
   ]);
   setInvoke('get_settings', () => settingsFixture());
   setInvoke('scan_recoverable', () => recoverable);
+  setInvoke('capture_status', () => ({
+    state: 'idle',
+    started_at_unix_ms: null,
+    output_dir: null,
+    segment_count: 0,
+  }));
 }
 
 function renderRecord() {
@@ -51,8 +57,9 @@ describe('RecordScreen', () => {
       emitEvent('audio_level', { peak: 1.0, rms: 0.5 });
     });
 
+    // Шкала логарифмическая (дБFS): rms 0.5 ≈ -6 дБFS → ~90% (важно, что > 0).
     const meter = screen.getByRole('meter');
-    expect(meter).toHaveAttribute('aria-valuenow', '50');
+    expect(Number(meter.getAttribute('aria-valuenow'))).toBeGreaterThan(0);
     expect(await screen.findByText('Клиппинг')).toBeInTheDocument();
   });
 
@@ -71,6 +78,21 @@ describe('RecordScreen', () => {
       emitEvent('reliability_warning', { kind: 'disk_critical', free_mb: 100 });
     });
     expect(await screen.findByText(/Критически мало места на диске/)).toBeInTheDocument();
+  });
+
+  it('восстанавливает статус идущей записи при монтировании', async () => {
+    wireDefaults();
+    // Запись уже идёт в фоне (после перехода между вкладками).
+    setInvoke('capture_status', () => ({
+      state: 'recording',
+      started_at_unix_ms: Date.now() - 5000,
+      output_dir: '/data/recordings/session-1',
+      segment_count: 2,
+    }));
+    renderRecord();
+
+    expect(await screen.findByText('Идёт запись')).toBeInTheDocument();
+    expect(await screen.findByText(/session-1/)).toBeInTheDocument();
   });
 
   it('показывает баннер восстановления по scan_recoverable', async () => {

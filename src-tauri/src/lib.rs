@@ -26,6 +26,7 @@ pub fn run() {
             ipc::audio_cmds::stop_capture,
             ipc::audio_cmds::pause_capture,
             ipc::audio_cmds::resume_capture,
+            ipc::audio_cmds::capture_status,
             ipc::audio_cmds::scan_recoverable,
             ipc::audio_cmds::recover_session,
             ipc::audio_cmds::discard_session,

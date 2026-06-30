@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Dispatch, SetStateAction } from 'react';
+import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import { BlockHead, Button, Card, CriticalNotice, Field, Select, Tag } from '../design';
 import {
   discardSession,
+  getCaptureStatus,
   listAudioDevices,
   onAudioLevel,
   onCaptureState,
@@ -30,8 +31,22 @@ import { getSettings, type Settings } from '../lib/settings';
 const FULL_SCALE = 1.0;
 // Порог визуальной индикации клиппинга (доля от полной шкалы) — косметика метра.
 const CLIP_RATIO = 0.99;
+// Нижняя граница шкалы метра в дБFS: уровень меряем логарифмически (как все
+// аудио-метры), иначе тихая речь в линейной шкале выглядит «мёртвой». Косметика.
+const METER_FLOOR_DBFS = -60;
 // Такт обновления хронометра — только отображение (раз в секунду).
 const CLOCK_TICK_MS = 1000;
+// Период опроса состояния захвата (живой счётчик сегментов) — отображение.
+const STATUS_POLL_MS = 3000;
+
+// Читаемая нейтральная кнопка на светлом фоне: вариант `secondary` из DS
+// рассчитан на тёмную шапку (светлый текст), поэтому переопределяем токенами.
+const NEUTRAL_BTN: CSSProperties = { color: 'var(--ink)', borderColor: 'var(--ink-soft)' };
+
+interface SessionInfo {
+  output_dir: string | null;
+  segment_count: number;
+}
 
 type UiState = 'idle' | CaptureStateValue;
 
@@ -57,9 +72,13 @@ export function RecordScreen() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [state, setState] = useState<UiState>('idle');
   const [level, setLevel] = useState<LevelEvent>({ peak: 0, rms: 0 });
+  const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [caseRef, setCaseRef] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Прогресс активной сессии (каталог + число записанных сегментов) —
+  // наглядное подтверждение, что запись действительно идёт.
+  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
 
   // Активные предупреждения надёжности (по событиям ядра).
   const [deviceLost, setDeviceLost] = useState(false);
@@ -90,11 +109,13 @@ export function RecordScreen() {
     }
   }, []);
 
-  // Первичная загрузка устройств/настроек/скана восстановления.
+  // Первичная загрузка + восстановление состояния идущей записи. Запись живёт в
+  // фоне (ядре), а компонент экрана размонтируется при переходе между вкладками
+  // — поэтому статус берём из `capture_status`, а не считаем «idle».
   useEffect(() => {
     let active = true;
-    Promise.all([listAudioDevices(), getSettings(), scanRecoverable()])
-      .then(([devs, s, rec]) => {
+    Promise.all([listAudioDevices(), getSettings(), scanRecoverable(), getCaptureStatus()])
+      .then(([devs, s, rec, status]) => {
         if (!active) return;
         setDevices(devs);
         setSettings(s);
@@ -102,6 +123,14 @@ export function RecordScreen() {
         const preferred =
           s.audio.device ?? devs.find((d) => d.is_default)?.name ?? devs[0]?.name ?? '';
         setDeviceName(preferred);
+        if (status.state === 'recording' || status.state === 'paused') {
+          setState(status.state);
+          setStartedAtMs(status.started_at_unix_ms);
+          setSessionInfo({
+            output_dir: status.output_dir,
+            segment_count: status.segment_count,
+          });
+        }
       })
       .catch((e: unknown) => active && setError(describeError(e)));
     return () => {
@@ -132,11 +161,36 @@ export function RecordScreen() {
     };
   }, [handleWarning]);
 
-  // Хронометр: тикаем раз в секунду, пока идёт запись.
+  // Хронометр: время от старта сессии (по метке ядра — переживает размонтаж
+  // экрана). Тикаем, пока сессия активна (запись/пауза).
   useEffect(() => {
-    if (state !== 'recording') return;
-    const id = window.setInterval(() => setElapsedSec((s) => s + 1), CLOCK_TICK_MS);
+    if ((state !== 'recording' && state !== 'paused') || startedAtMs == null) return;
+    const tick = () =>
+      setElapsedSec(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)));
+    tick();
+    const id = window.setInterval(tick, CLOCK_TICK_MS);
     return () => window.clearInterval(id);
+  }, [state, startedAtMs]);
+
+  // Живой прогресс сессии: опрашиваем число записанных сегментов, пока активны.
+  useEffect(() => {
+    if (state !== 'recording' && state !== 'paused') return;
+    let active = true;
+    const poll = () => {
+      getCaptureStatus()
+        .then((s) => {
+          if (active && (s.state === 'recording' || s.state === 'paused')) {
+            setSessionInfo({ output_dir: s.output_dir, segment_count: s.segment_count });
+          }
+        })
+        .catch(() => {});
+    };
+    poll();
+    const id = window.setInterval(poll, STATUS_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
   }, [state]);
 
   const onStart = useCallback(async () => {
@@ -145,10 +199,13 @@ export function RecordScreen() {
     setDeviceLost(false);
     setDiskWarning(null);
     setMaxDuration(false);
+    setStartedAtMs(Date.now());
     try {
-      await startCapture();
+      const started = await startCapture();
       setState('recording');
+      setSessionInfo({ output_dir: started.output_dir, segment_count: 0 });
     } catch (e) {
+      setStartedAtMs(null);
       setError(describeError(e));
     }
   }, []);
@@ -157,6 +214,8 @@ export function RecordScreen() {
     try {
       await stopCapture();
       setState('stopped');
+      setStartedAtMs(null);
+      setSessionInfo(null);
       setLevel({ peak: 0, rms: 0 });
     } catch (e) {
       setError(describeError(e));
@@ -274,6 +333,7 @@ export function RecordScreen() {
               </Button>
               <Button
                 variant="secondary"
+                style={NEUTRAL_BTN}
                 onClick={() => void runRecover(r, discardSession, setRecoverable, setError)}
               >
                 Закрыть
@@ -350,6 +410,20 @@ export function RecordScreen() {
           <span style={fieldLabelStyle}>Уровень сигнала</span>
           <LevelMeter level={level} active={state === 'recording'} />
         </div>
+
+        {sessionInfo && (state === 'recording' || state === 'paused') && (
+          <p
+            aria-live="polite"
+            style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 16, marginBottom: 0 }}
+          >
+            Пишется в:{' '}
+            <span className="num" style={{ wordBreak: 'break-all' }}>
+              {sessionInfo.output_dir ?? '—'}
+            </span>{' '}
+            · сегментов записано:{' '}
+            <span className="num">{sessionInfo.segment_count}</span>
+          </p>
+        )}
       </Card>
 
       <Card>
@@ -375,12 +449,12 @@ export function RecordScreen() {
           </Button>
         )}
         {state === 'recording' && (
-          <Button variant="secondary" onClick={() => void onPause()}>
+          <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => void onPause()}>
             ❚❚ Пауза
           </Button>
         )}
         {state === 'paused' && (
-          <Button variant="secondary" onClick={() => void onResume()}>
+          <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => void onResume()}>
             ▶ Возобновить
           </Button>
         )}
@@ -399,10 +473,19 @@ export function RecordScreen() {
   );
 }
 
+// Преобразование линейной амплитуды [0..1] в проценты шкалы по дБFS: тихая речь
+// в линейной шкале почти не видна, логарифм делает метр «живым».
+function toMeterPct(v: number): number {
+  if (v <= 0) return 0;
+  const db = 20 * Math.log10(v); // dBFS, ≤ 0
+  const pct = ((db - METER_FLOOR_DBFS) / (0 - METER_FLOOR_DBFS)) * 100;
+  return Math.max(0, Math.min(100, pct));
+}
+
 // ── Индикатор уровня: столбики RMS/пик + клиппинг (решение «Решено») ─────────
 function LevelMeter({ level, active }: { level: LevelEvent; active: boolean }) {
-  const rmsPct = Math.min(level.rms / FULL_SCALE, 1) * 100;
-  const peakPct = Math.min(level.peak / FULL_SCALE, 1) * 100;
+  const rmsPct = toMeterPct(level.rms);
+  const peakPct = toMeterPct(level.peak);
   const clipping = active && level.peak >= FULL_SCALE * CLIP_RATIO;
   return (
     <div
