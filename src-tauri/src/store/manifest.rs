@@ -61,8 +61,11 @@ pub enum UploadStatus {
     Uploaded,
     /// Сервер подтвердил приём и целостность.
     Confirmed,
-    /// Выгрузка завершилась ошибкой (будет ретрай — `06`).
+    /// Выгрузка завершилась временной ошибкой (сеть/5xx) — будет ретрай (`06`).
     Failed,
+    /// Сервер не подтвердил целостность (`verify=false`, подмена сегмента):
+    /// терминально, локальную копию **не** удаляем (`06`).
+    IntegrityFailed,
 }
 
 impl UploadStatus {
@@ -73,6 +76,7 @@ impl UploadStatus {
             UploadStatus::Uploaded => "uploaded",
             UploadStatus::Confirmed => "confirmed",
             UploadStatus::Failed => "failed",
+            UploadStatus::IntegrityFailed => "integrity_failed",
         }
     }
 
@@ -83,6 +87,7 @@ impl UploadStatus {
             "uploaded" => Some(UploadStatus::Uploaded),
             "confirmed" => Some(UploadStatus::Confirmed),
             "failed" => Some(UploadStatus::Failed),
+            "integrity_failed" => Some(UploadStatus::IntegrityFailed),
             _ => None,
         }
     }
@@ -111,6 +116,8 @@ pub struct SessionRecord {
     pub server_integrity_verified: bool,
     pub confirmed_at_unix_ms: Option<u64>,
     pub local_purged_at_unix_ms: Option<u64>,
+    /// Операторская пауза догрузки (`06`): планировщик пропускает такие сессии.
+    pub upload_paused: bool,
 }
 
 impl SessionRecord {
@@ -142,6 +149,7 @@ impl SessionRecord {
             server_integrity_verified: false,
             confirmed_at_unix_ms: None,
             local_purged_at_unix_ms: None,
+            upload_paused: false,
         }
     }
 }
@@ -203,8 +211,8 @@ impl ManifestStore {
                 id, dir, started_at_unix_ms, status, station_id, operator_id,
                 adjudication_ref, sample_rate_hz, channels, bit_depth,
                 final_chain_link, upload_status, server_integrity_verified,
-                confirmed_at_unix_ms, local_purged_at_unix_ms
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
             ON CONFLICT(id) DO UPDATE SET
                 dir=excluded.dir,
                 started_at_unix_ms=excluded.started_at_unix_ms,
@@ -219,7 +227,8 @@ impl ManifestStore {
                 upload_status=excluded.upload_status,
                 server_integrity_verified=excluded.server_integrity_verified,
                 confirmed_at_unix_ms=excluded.confirmed_at_unix_ms,
-                local_purged_at_unix_ms=excluded.local_purged_at_unix_ms",
+                local_purged_at_unix_ms=excluded.local_purged_at_unix_ms,
+                upload_paused=excluded.upload_paused",
             rusqlite::params![
                 s.id,
                 s.dir,
@@ -236,6 +245,7 @@ impl ManifestStore {
                 s.server_integrity_verified as i64,
                 s.confirmed_at_unix_ms.map(|v| v as i64),
                 s.local_purged_at_unix_ms.map(|v| v as i64),
+                s.upload_paused as i64,
             ],
         )?;
         Ok(())
@@ -328,6 +338,15 @@ impl ManifestStore {
         )
     }
 
+    /// Поставить/снять операторскую паузу догрузки (наполняется `06`).
+    pub fn set_upload_paused(&self, session_id: &str, paused: bool) -> Result<(), StoreError> {
+        self.update_session_field(
+            session_id,
+            "upload_paused = ?2",
+            rusqlite::params![session_id, paused as i64],
+        )
+    }
+
     /// Привязать сессию к делу (наполняется `05`).
     pub fn set_adjudication_ref(
         &self,
@@ -402,7 +421,7 @@ impl ManifestStore {
                 "SELECT id, dir, started_at_unix_ms, status, station_id, operator_id,
                         adjudication_ref, sample_rate_hz, channels, bit_depth,
                         final_chain_link, upload_status, server_integrity_verified,
-                        confirmed_at_unix_ms, local_purged_at_unix_ms
+                        confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused
                  FROM sessions WHERE id = ?1",
                 [session_id],
                 map_session,
@@ -417,7 +436,7 @@ impl ManifestStore {
             "SELECT id, dir, started_at_unix_ms, status, station_id, operator_id,
                     adjudication_ref, sample_rate_hz, channels, bit_depth,
                     final_chain_link, upload_status, server_integrity_verified,
-                    confirmed_at_unix_ms, local_purged_at_unix_ms
+                    confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused
              FROM sessions ORDER BY started_at_unix_ms DESC",
         )?;
         let rows = stmt.query_map([], map_session)?;
@@ -524,6 +543,7 @@ fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<SessionRecord
             server_integrity_verified: row.get::<_, i64>(12)? != 0,
             confirmed_at_unix_ms: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
             local_purged_at_unix_ms: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
+            upload_paused: row.get::<_, i64>(15)? != 0,
         })
     })();
     Ok(parsed)
@@ -621,11 +641,13 @@ mod tests {
         store
             .set_adjudication_ref("sess-1", Some("adj-42"))
             .unwrap();
+        store.set_upload_paused("sess-1", true).unwrap();
         let s = store.get_session("sess-1").unwrap().unwrap();
         assert_eq!(s.status, SessionStatus::Stopped);
         assert_eq!(s.final_chain_link.as_deref(), Some("final-link"));
         assert_eq!(s.upload_status, UploadStatus::Uploaded);
         assert_eq!(s.adjudication_ref.as_deref(), Some("adj-42"));
+        assert!(s.upload_paused);
     }
 
     #[test]

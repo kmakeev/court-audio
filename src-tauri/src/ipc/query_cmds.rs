@@ -56,6 +56,11 @@ pub struct SessionView {
     pub segment_count: u32,
     /// Длительность записи в секундах (сумма кадров сегментов / частота).
     pub duration_seconds: u64,
+    /// Всего частей выгрузки (= сегментов, заявленных в `upload/init`); 0 — пока
+    /// выгрузка не начиналась. Этап 06: прогресс «выгружается N%».
+    pub upload_total_parts: u32,
+    /// Сколько частей принято сервером.
+    pub upload_sent_parts: u32,
 }
 
 /// Перечислить локальные сессии из манифеста (новые сверху). Источник данных
@@ -73,9 +78,14 @@ pub fn list_sessions(app: AppHandle) -> Result<Vec<SessionView>, String> {
         } else {
             0
         };
+        // Прогресс выгрузки (этап 06): из трекинга частей `upload_parts`.
+        let progress =
+            crate::sync::queue::progress(&store, &record.id).map_err(|e| e.to_string())?;
         out.push(SessionView {
             segment_count: segs.len() as u32,
             duration_seconds,
+            upload_total_parts: progress.total,
+            upload_sent_parts: progress.sent,
             record,
         });
     }

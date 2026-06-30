@@ -69,8 +69,11 @@ export function sessionViewFixture(over: Partial<SessionView> = {}): SessionView
     server_integrity_verified: false,
     confirmed_at_unix_ms: null,
     local_purged_at_unix_ms: null,
+    upload_paused: false,
     segment_count: 4,
     duration_seconds: 125,
+    upload_total_parts: 0,
+    upload_sent_parts: 0,
     ...over,
   };
 }

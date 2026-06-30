@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react';
-import { BlockHead, Card, EmptyState, Skeleton, Tag } from '../design';
+import { useCallback, useEffect, useState } from 'react';
+import { BlockHead, Button, Card, EmptyState, Skeleton, Tag } from '../design';
 import {
   listSessions,
-  type SessionStatus,
+  pauseUpload,
+  resumeUpload,
+  retryUpload,
   type SessionView,
   type UploadStatus,
 } from '../lib/core';
 
-// Экран «Сессии» (этап 04). Список локальных записей из манифеста (этап 03):
-// дата, длительность, привязка к делу, статус обработки/выгрузки. Только чтение
-// (`list_sessions`); выгрузка и прогресс — этап 06.
+// Экран «Сессии» (этап 04 + 06). Список локальных записей из манифеста (этап 03):
+// дата, длительность, привязка к делу, статус и прогресс выгрузки в ex_system.
+// Управление выгрузкой (этап 06): повтор/пауза/продолжение — команды ipc::sync_cmds.
 
 type Tone = 'default' | 'accent' | 'gold' | 'green';
 
@@ -18,22 +20,50 @@ interface StatusView {
   tone: Tone;
 }
 
-/** Единый статус строки: запись активна / удалена / иначе — по статусу выгрузки. */
-function deriveStatus(status: SessionStatus, upload: UploadStatus): StatusView {
-  if (status === 'recording') return { label: 'Записывается', tone: 'accent' };
-  if (status === 'purged') return { label: 'Удалена локально', tone: 'default' };
+/** Доля выгруженных частей в процентах (для статуса «Выгружается N%»). */
+function uploadPercent(s: SessionView): number {
+  if (s.upload_total_parts === 0) return 0;
+  return Math.floor((s.upload_sent_parts / s.upload_total_parts) * 100);
+}
+
+/** Единый статус строки: запись активна / удалена / пауза / иначе — по выгрузке. */
+function deriveStatus(s: SessionView): StatusView {
+  if (s.status === 'recording') return { label: 'Записывается', tone: 'accent' };
+  if (s.status === 'purged') return { label: 'Удалена локально', tone: 'default' };
+  if (s.upload_paused) return { label: 'Выгрузка на паузе', tone: 'default' };
+  return uploadStatusView(s.upload_status, uploadPercent(s));
+}
+
+function uploadStatusView(upload: UploadStatus, percent: number): StatusView {
   switch (upload) {
     case 'pending':
       return { label: 'Готова к выгрузке', tone: 'default' };
     case 'uploading':
-      return { label: 'Выгружается', tone: 'gold' };
+      return { label: `Выгружается ${percent}%`, tone: 'gold' };
     case 'uploaded':
       return { label: 'Выгружена', tone: 'gold' };
     case 'confirmed':
       return { label: 'Подтверждена', tone: 'green' };
     case 'failed':
       return { label: 'Ошибка выгрузки', tone: 'accent' };
+    case 'integrity_failed':
+      return { label: 'Ошибка целостности', tone: 'accent' };
   }
+}
+
+/** Какие действия выгрузки доступны для записи (этап 06). */
+function uploadActions(s: SessionView): {
+  canRetry: boolean;
+  canPause: boolean;
+  canResume: boolean;
+} {
+  const finished = s.status !== 'recording' && s.status !== 'purged';
+  const done = s.upload_status === 'confirmed';
+  return {
+    canRetry: finished && !done && (s.upload_status === 'failed' || s.upload_status === 'integrity_failed'),
+    canPause: finished && !done && !s.upload_paused,
+    canResume: finished && !done && s.upload_paused,
+  };
 }
 
 type Load =
@@ -43,8 +73,9 @@ type Load =
 
 export function SessionsScreen() {
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
+  const [busy, setBusy] = useState<string | null>(null);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     let active = true;
     listSessions()
       .then((sessions) => active && setLoad({ kind: 'ready', sessions }))
@@ -53,6 +84,23 @@ export function SessionsScreen() {
       active = false;
     };
   }, []);
+
+  useEffect(() => reload(), [reload]);
+
+  const runAction = useCallback(
+    async (id: string, action: () => Promise<void>) => {
+      setBusy(id);
+      try {
+        await action();
+        reload();
+      } catch (e: unknown) {
+        setLoad({ kind: 'error', message: describeError(e) });
+      } finally {
+        setBusy(null);
+      }
+    },
+    [reload],
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
@@ -85,7 +133,9 @@ export function SessionsScreen() {
 
       {load.kind === 'ready' &&
         load.sessions.map((s) => {
-          const sv = deriveStatus(s.status, s.upload_status);
+          const sv = deriveStatus(s);
+          const actions = uploadActions(s);
+          const isBusy = busy === s.dir;
           return (
             <Card key={s.id}>
               <div
@@ -115,7 +165,36 @@ export function SessionsScreen() {
                     {s.segment_count} сегм. · {formatHz(s.sample_rate_hz)} / {s.bit_depth} бит
                   </div>
                 </div>
-                <Tag tone={sv.tone}>{sv.label}</Tag>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {actions.canRetry && (
+                    <Button
+                      variant="mini"
+                      loading={isBusy}
+                      onClick={() => runAction(s.dir, () => retryUpload(s.dir))}
+                    >
+                      Повторить
+                    </Button>
+                  )}
+                  {actions.canPause && (
+                    <Button
+                      variant="mini"
+                      loading={isBusy}
+                      onClick={() => runAction(s.dir, () => pauseUpload(s.dir))}
+                    >
+                      Пауза
+                    </Button>
+                  )}
+                  {actions.canResume && (
+                    <Button
+                      variant="mini"
+                      loading={isBusy}
+                      onClick={() => runAction(s.dir, () => resumeUpload(s.dir))}
+                    >
+                      Продолжить
+                    </Button>
+                  )}
+                  <Tag tone={sv.tone}>{sv.label}</Tag>
+                </div>
               </div>
             </Card>
           );

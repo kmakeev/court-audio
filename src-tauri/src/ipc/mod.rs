@@ -14,6 +14,7 @@ use crate::settings::Settings;
 pub mod audio_cmds;
 pub mod case_cmds;
 pub mod query_cmds;
+pub mod sync_cmds;
 
 /// Имя файла настроек в каталоге конфигурации приложения.
 const SETTINGS_FILE: &str = "settings.json";
@@ -68,7 +69,10 @@ pub fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
 /// Корень локального хранилища: `storage.root_path` или `<data-dir>/recordings`.
 /// Общий помощник для команд захвата ([`audio_cmds`]) и запросов
 /// ([`query_cmds`]) — единый источник пути без дублирования.
-pub(crate) fn resolve_storage_root(app: &AppHandle, settings: &Settings) -> Result<PathBuf, String> {
+pub(crate) fn resolve_storage_root(
+    app: &AppHandle,
+    settings: &Settings,
+) -> Result<PathBuf, String> {
     match &settings.storage.root_path {
         Some(p) => Ok(PathBuf::from(p)),
         None => Ok(app

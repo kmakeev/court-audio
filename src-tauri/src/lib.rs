@@ -19,6 +19,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ipc::audio_cmds::CaptureState::default())
         .manage(ipc::audio_cmds::MonitorState::default())
+        .setup(|app| {
+            // Фоновый агент выгрузки (этап 06): низкоприоритетный поток, не на
+            // горячем пути захвата. Idle, пока не задан sync.server_base_url.
+            ipc::sync_cmds::spawn_scheduler(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ipc::get_settings,
             ipc::save_settings,
@@ -38,7 +44,10 @@ pub fn run() {
             ipc::case_cmds::get_case_cache_status,
             ipc::case_cmds::search_cases,
             ipc::case_cmds::sync_case_cache,
-            ipc::case_cmds::bind_session_case
+            ipc::case_cmds::bind_session_case,
+            ipc::sync_cmds::retry_upload,
+            ipc::sync_cmds::pause_upload,
+            ipc::sync_cmds::resume_upload
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска приложения «Аудиопротокол»");

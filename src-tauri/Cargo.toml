@@ -41,10 +41,15 @@ argon2 = "0.5"
 # Генерация nonce (96 бит) и соли KDF.
 rand = "0.8"
 
-# ── Крейты профильных этапов (подключаются по мере реализации) ───────────────
-# Этап 06 (sync_agent): асинхронная возобновляемая выгрузка в ex_system
-# tokio = { version = "1", features = ["full"] }
-# reqwest = { version = "0.12", features = ["json", "stream"] }
+# ── Этап 06 (sync_agent): возобновляемая чанковая выгрузка в ex_system ────────
+# Блокирующий HTTP-клиент: кодовая база синхронно-поточная (watchdog/recovery —
+# потоки), Tauri-команды синхронны, parallel_uploads дефолт 1 — async-рантайм
+# (tokio) избыточен. rustls вместо OpenSSL — ради кросс-/импортозамещаемой сборки.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
 
 [dev-dependencies]
 # Временный каталог для интеграционного теста конвейера записи.

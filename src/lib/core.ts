@@ -141,7 +141,8 @@ export type UploadStatus =
   | 'uploading'
   | 'uploaded'
   | 'confirmed'
-  | 'failed';
+  | 'failed'
+  | 'integrity_failed';
 
 export type EventKind =
   | 'session_started'
@@ -169,6 +170,8 @@ export interface SessionRecord {
   server_integrity_verified: boolean;
   confirmed_at_unix_ms: number | null;
   local_purged_at_unix_ms: number | null;
+  /** Операторская пауза догрузки (этап 06). */
+  upload_paused: boolean;
 }
 
 export interface EventRecord {
@@ -182,10 +185,31 @@ export interface EventRecord {
 export interface SessionView extends SessionRecord {
   segment_count: number;
   duration_seconds: number;
+  /** Всего частей выгрузки (= сегментов); 0 — выгрузка не начиналась (этап 06). */
+  upload_total_parts: number;
+  /** Сколько частей принято сервером (для прогресса «выгружается N%»). */
+  upload_sent_parts: number;
 }
 
 export function listSessions(): Promise<SessionView[]> {
   return invoke<SessionView[]>('list_sessions');
+}
+
+// ── Управление выгрузкой (этап 06: ipc::sync_cmds) ──────────────────────────
+
+/** Повторить выгрузку записи: сбросить ошибку → в очередь, снять паузу. */
+export function retryUpload(dir: string): Promise<void> {
+  return invoke('retry_upload', { dir });
+}
+
+/** Поставить выгрузку записи на паузу (планировщик её пропускает). */
+export function pauseUpload(dir: string): Promise<void> {
+  return invoke('pause_upload', { dir });
+}
+
+/** Снять паузу выгрузки записи. */
+export function resumeUpload(dir: string): Promise<void> {
+  return invoke('resume_upload', { dir });
 }
 
 // ── Привязка к делу (этап 05: store::case_binding / store::case_cache) ──────
