@@ -139,3 +139,57 @@ fn stereo_input_is_downmixed_to_mono() {
     let want: Vec<i16> = left[..8].iter().map(|&l| expect_i16(l * 0.5)).collect();
     assert_eq!(got, want);
 }
+
+/// Регрессия (этап 02): короткая запись (короче `segment_seconds`, ни одной
+/// границы ротации) должна журналировать ХВОСТОВОЙ сегмент `SegmentCompleted`
+/// при финализации на стопе. Без этого reconcile видел 0 сегментов и запись не
+/// выгружалась (аудио осиротевало на диске).
+#[test]
+fn short_recording_journals_trailing_segment() {
+    use court_audio_lib::recorder::journal::{replay, Journal, JOURNAL_FILE_NAME};
+    use std::sync::Mutex;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let rate = 8_000u32;
+    // 4000 кадров = 0.5 c при segment_seconds=1 → порог ротации (8000) не достигнут:
+    // ни одной границы, только финальный неполный сегмент.
+    let total_frames = 4_000usize;
+    let signal = sine(total_frames, rate, 440.0, 0.5);
+
+    let (producer, consumer) = ring::channel(total_frames + 16);
+    assert_eq!(producer.push_slice(&signal), total_frames);
+
+    let journal = Arc::new(Mutex::new(Journal::open(tmp.path()).unwrap()));
+    let cfg = ConsumerConfig {
+        native_channels: 1,
+        target_channels: 1,
+        bit_depth: 16,
+        sample_rate_hz: rate,
+        segment_seconds: 1,
+        flush_interval: Duration::from_millis(1_500),
+        level_update_hz: 25,
+        output_dir: tmp.path().to_path_buf(),
+        scratch_len: consumer.capacity(),
+    };
+    let rel = ConsumerReliability {
+        journal: Some(journal.clone()),
+        mirror: None,
+        disk: None,
+        max_session: None,
+        on_event: None,
+    };
+    let stop = Arc::new(AtomicBool::new(true));
+    let level_cb = Box::new(|_: LevelEvent| {});
+    let segments = run_consumer(consumer, cfg, level_cb, stop, rel).unwrap();
+
+    // Один (хвостовой) сегмент в результате.
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].index, 1);
+
+    // И он зафиксирован в журнале как SegmentCompleted (иначе reconcile видит 0).
+    drop(journal);
+    let state = replay(&tmp.path().join(JOURNAL_FILE_NAME)).unwrap();
+    assert_eq!(state.completed_segments.len(), 1);
+    assert_eq!(state.completed_segments[0].index, 1);
+    assert_eq!(state.completed_segments[0].frames, total_frames as u64);
+}

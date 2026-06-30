@@ -76,7 +76,25 @@ fn killtest_recovers_unfinished_session() {
     let segments = run_consumer(consumer, cfg, Box::new(|_: LevelEvent| {}), stop, rel).unwrap();
     assert_eq!(segments.len(), 3, "ожидаем seg1, seg2 и частичный seg3");
 
-    // Журнал зафиксировал завершение двух сегментов, закрытых ротацией.
+    // Имитация краха питания: при внезапном завершении ХВОСТОВОЙ (3-й) сегмент
+    // остаётся на диске, но НЕ успевает попасть в журнал (его SegmentCompleted
+    // пишется только на финализации, которой при крахе не происходит). Чистый
+    // stop в run_consumer журналирует все сегменты, поэтому для верности
+    // крах-фикстуры убираем последнюю запись segment_completed (seg3).
+    {
+        let jpath = session.join(journal::JOURNAL_FILE_NAME);
+        let text = std::fs::read_to_string(&jpath).unwrap();
+        let mut lines: Vec<&str> = text.lines().collect();
+        let pos = lines
+            .iter()
+            .rposition(|l| l.contains("\"segment_completed\""))
+            .expect("в журнале есть segment_completed");
+        lines.remove(pos);
+        std::fs::write(&jpath, lines.join("\n") + "\n").unwrap();
+    }
+
+    // Журнал зафиксировал завершение двух сегментов, закрытых ротацией (хвостовой
+    // seg3 «не успел» — см. имитацию краха выше).
     let replay_before = journal::replay(&session.join(journal::JOURNAL_FILE_NAME)).unwrap();
     assert_eq!(replay_before.completed_segments.len(), 2);
     assert!(replay_before.is_unfinished());

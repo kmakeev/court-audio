@@ -851,6 +851,9 @@ pub fn run_consumer(
     let session_start = Instant::now();
     let mut max_warned = false;
     let mut last_disk_status = DiskStatus::Ok;
+    // Сколько сегментов уже журналировано (через drain_completed). Хвостовой
+    // сегмент, закрываемый finalize() на стопе, журналируем отдельно ниже.
+    let mut journaled = 0usize;
 
     'run: loop {
         let n = consumer.pop_slice(&mut scratch);
@@ -872,6 +875,7 @@ pub fn run_consumer(
                     path: seg.path.to_string_lossy().into_owned(),
                     frames: seg.frames,
                 });
+                journaled += 1;
                 if let Some(mirror) = &rel.mirror {
                     if let Err(e) = mirror.mirror_segment(&seg) {
                         eprintln!(
@@ -909,7 +913,29 @@ pub fn run_consumer(
         thread::sleep(poll);
     }
 
-    writer.finalize()
+    // Финализация на стопе: finalize() закрывает текущий открытый сегмент и
+    // возвращает ВСЕ сегменты. Сегменты, не прошедшие через drain_completed выше
+    // (последний неполный сегмент; при защитном стопе — и недослитые), здесь
+    // журналируем и зеркалируем — иначе короткая запись (короче segment_seconds)
+    // остаётся без segment_completed, не попадает в манифест и не выгружается
+    // (потеря данных, нарушение «не терять более нескольких секунд»).
+    let segments = writer.finalize()?;
+    for seg in segments.iter().skip(journaled) {
+        rel.journal(&JournalRecord::SegmentCompleted {
+            index: seg.index,
+            path: seg.path.to_string_lossy().into_owned(),
+            frames: seg.frames,
+        });
+        if let Some(mirror) = &rel.mirror {
+            if let Err(e) = mirror.mirror_segment(seg) {
+                eprintln!(
+                    "[reliability] зеркалирование {:?} не удалось: {e}",
+                    seg.path
+                );
+            }
+        }
+    }
+    Ok(segments)
 }
 
 /// Замерить свободное место и при ухудшении статуса — оповестить/журналировать.
