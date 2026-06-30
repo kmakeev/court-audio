@@ -68,10 +68,12 @@ pub struct VerifyOutcome {
     pub integrity_verified: bool,
 }
 
-/// Ответ регистрации сессии.
+/// Ответ регистрации сессии. Сервер (`07`) отдаёт `recording_id` целым (PK
+/// `AudioRecording`); в пайплайне выгрузки он используется как строковый
+/// сегмент URL (`audio/recordings/<id>/...`), поэтому сразу приводим к строке.
 #[derive(Debug, Clone, Deserialize)]
 struct RegisterResponse {
-    recording_id: String,
+    recording_id: i64,
 }
 
 /// Транспорт выгрузки по контракту `07`. `Send + Sync` — части грузятся
@@ -164,7 +166,7 @@ impl UploadTransport for HttpTransport {
         let parsed: RegisterResponse = resp
             .json()
             .map_err(|e| TransportError::permanent(format!("разбор ответа регистрации: {e}")))?;
-        Ok(parsed.recording_id)
+        Ok(parsed.recording_id.to_string())
     }
 
     fn init_upload(
