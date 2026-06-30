@@ -81,3 +81,45 @@ body {
   max-width: 460px;
   margin: 0;
 }
+
+/* ── Skeleton-загрузчики (components/design/Skeleton.tsx) ────────────────── */
+.skeleton {
+  background-color: var(--paper-soft);
+  background-image: linear-gradient(
+    90deg,
+    var(--paper-soft) 0%,
+    var(--paper-elev) 50%,
+    var(--paper-soft) 100%
+  );
+  background-size: 200% 100%;
+  background-position: 200% 0;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+    background-image: none;
+    background-color: var(--paper-soft);
+  }
+}
+
+/* ── InfoTip «почему так?» (components/design/InfoTip.tsx) ───────────────── */
+.infotip-pop {
+  position: absolute;
+  z-index: 60;
+  width: 280px;
+  max-width: min(280px, 86vw);
+  padding: 12px 14px;
+  background: var(--paper-elev);
+  border: 1px solid var(--hairline);
+  box-shadow: 0 8px 24px rgba(26, 24, 20, 0.16);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--body);
+}

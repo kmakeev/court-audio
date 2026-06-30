@@ -27,6 +27,12 @@
 | `src/design/Tag.tsx` | `src/components/design/Tag.tsx` |
 | `src/design/EmptyState.tsx` | `src/components/design/EmptyState.tsx` |
 | `src/design/Checkbox.tsx` | `src/components/design/Checkbox.tsx` |
+| `src/design/Field.tsx` *(этап 04)* | `src/components/design/Field.tsx` |
+| `src/design/Select.tsx` *(этап 04)* | `src/components/design/Select.tsx` |
+| `src/design/CriticalNotice.tsx` *(этап 04)* | `src/components/design/CriticalNotice.tsx` |
+| `src/design/InfoTip.tsx` *(этап 04)* | `src/components/design/InfoTip.tsx` |
+| `src/design/Skeleton.tsx` *(этап 04)* | `src/components/design/Skeleton.tsx` |
+| `src/styles/globals.css` (`.skeleton`/`.infotip-pop`, этап 04) | `src/styles/skeleton.css` + `src/styles/responsive.css` (`.infotip-pop`) |
 
 ## Что НЕ вендорится (намеренно)
 

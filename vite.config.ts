@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 // @ts-expect-error process is a node global available at config time
@@ -18,5 +18,14 @@ export default defineConfig({
       // Не следим за Rust-ядром — пересборку ведёт cargo/tauri.
       ignored: ['**/src-tauri/**'],
     },
+  },
+  // Vitest: компонентные тесты UI этапа 04 (jsdom + Testing Library). Команды и
+  // события Tauri замоканы в `src/test/setup.ts`.
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+    css: false,
+    exclude: ['node_modules', 'dist', 'src-tauri'],
   },
 });

@@ -17,13 +17,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::capture::{
     CaptureParams, CaptureSession, DiskWatch, ReliabilityConfig, ReliabilityEvent,
 };
 use crate::audio::devices::{list_input_devices, DeviceInfo};
-use crate::ipc::load_settings;
+use crate::ipc::{load_settings, resolve_storage_root};
 use crate::recorder::journal::{Journal, JournalRecord};
 use crate::recorder::recovery;
 use crate::reliability::disk_monitor::DiskThresholds;
@@ -296,18 +296,6 @@ fn build_reliability(
         auto_resume: r.device_reconnect.auto_resume,
         device_name: settings.audio.device.clone(),
         on_event: Some(on_event),
-    }
-}
-
-/// Корень локального хранилища: `storage.root_path` или `<data-dir>/recordings`.
-fn resolve_storage_root(app: &AppHandle, settings: &Settings) -> Result<PathBuf, String> {
-    match &settings.storage.root_path {
-        Some(p) => Ok(PathBuf::from(p)),
-        None => Ok(app
-            .path()
-            .app_data_dir()
-            .map_err(|e| format!("не удалось определить каталог данных: {e}"))?
-            .join("recordings")),
     }
 }
 
