@@ -136,7 +136,9 @@ describe('RecordScreen', () => {
     // Кнопка «Старт» в фазе сохранения не показывается.
     expect(screen.queryByText('● Старт записи')).not.toBeInTheDocument();
 
-    // Завершаем финализацию — индикатор исчезает.
+    // Завершаем финализацию — индикатор исчезает. Ждём, пока stopCapture
+    // действительно вызовется (после кадра отрисовки), затем разрешаем промис.
+    await waitFor(() => expect(resolveStop).not.toBeNull());
     await act(async () => {
       resolveStop?.([]);
     });

@@ -270,6 +270,10 @@ export function RecordScreen() {
     // `capture_state: stopping`: синхронная команда может задержать доставку
     // события в webview до своего возврата, и индикатор бы не появился.
     setState('stopping');
+    // Дать webview отрисовать кадр «Сохранение записи…» ДО вызова stopCapture:
+    // финализация (сброс/хеши/журнал) может заблокировать поток, и без
+    // гарантированной отрисовки индикатор не успел бы проявиться.
+    await nextPaint();
     try {
       await stopCapture();
       setState('stopped');
@@ -746,6 +750,25 @@ function formatChannels(n: number): string {
   if (n === 1) return 'моно';
   if (n === 2) return 'стерео';
   return `${n} кан.`;
+}
+
+// Дождаться отрисовки кадра (двойной requestAnimationFrame — после commit'а
+// React браузер успевает покрасить). Фолбэк по таймеру — для сред без rAF
+// (тесты) и чтобы не зависнуть дольше одного кадра.
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (!settled) {
+        settled = true;
+        resolve();
+      }
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => requestAnimationFrame(done));
+    }
+    setTimeout(done, 32);
+  });
 }
 
 function describeError(e: unknown): string {
