@@ -7,11 +7,11 @@
 //! вызывают уже протестированные функции стора. UI получает один тип ошибки
 //! (`String`).
 //!
-//! **Транспорт синхронизации** (HTTP к slim-эндпоинту докета `ex_system`)
-//! появляется в этапах `06`/`07` (сеть + операторская авторизация + серверный
-//! эндпоинт). До тех пор [`sync_case_cache`] фетчера не имеет и честно сообщает
-//! об этом; вся фетчер-агностичная логика кэша ([`case_cache::sync_into_cache`])
-//! уже на месте и протестирована оффлайн.
+//! **Транспорт синхронизации** — HTTP к slim-эндпоинту докета `ex_system`
+//! (`GET /audio/docket/`, этап `07`) под станционным JWT (`06`). Реализован в
+//! [`sync_case_cache`] через [`docket::DocketHttpFetcher`]; фетчер-агностичная
+//! логика кэша ([`case_cache::sync_into_cache`] + [`case_cache::save`]) — на
+//! месте и протестирована.
 
 use serde::Serialize;
 use tauri::AppHandle;
@@ -23,6 +23,8 @@ use crate::store::case_binding::AdjudicationRef;
 use crate::store::case_cache::{self, CaseRecord};
 use crate::store::manifest::ManifestStore;
 use crate::store::reconcile;
+use crate::sync::docket::DocketHttpFetcher;
+use crate::sync::OPERATOR_TOKEN_ENV;
 
 /// Свежесть кэша дел для UI (индикатор «синхронизировано/устарел»).
 #[derive(Debug, Clone, Serialize)]
@@ -73,20 +75,43 @@ pub fn search_cases(app: AppHandle, query: String) -> Result<Vec<CaseRecord>, St
     Ok(cache.map(|c| c.search(&query)).unwrap_or_default())
 }
 
-/// Синхронизировать кэш дел из докета `ex_system`.
+/// Синхронизировать кэш дел из докета `ex_system` (`GET /audio/docket/`).
 ///
-/// В этапе `05` транспорт отсутствует (HTTP-клиент — `06`, slim-эндпоинт и
-/// операторская авторизация — `07`), поэтому команда честно сообщает, что
-/// синхронизация появится позже. Логика наполнения кэша
-/// ([`case_cache::sync_into_cache`] + [`case_cache::save`]) уже готова и будет
-/// подключена к реальному фетчеру в `06`.
+/// Требует адрес сервера (`sync.server_base_url`) и операторский токен
+/// (env `COURT_AUDIO_OPERATOR_TOKEN` — до экрана входа). Тянет докет в скоупе
+/// станции (сервер определяет его по идентичности станции), режет до
+/// `case_cache.max_records` (минимизация ПДн) и сохраняет в **зашифрованный**
+/// локальный кэш. Сеть/токен отсутствуют → читаемая ошибка, кэш не трогаем.
 #[tauri::command]
-pub fn sync_case_cache(_app: AppHandle) -> Result<CaseCacheStatus, String> {
-    Err(
-        "синхронизация кэша дел появится с сетевым агентом (этап 06) и серверным \
-         докет-эндпоинтом (этап 07); пока доступны оффлайн-поиск по кэшу и ручной ввод"
-            .to_string(),
-    )
+pub fn sync_case_cache(app: AppHandle) -> Result<CaseCacheStatus, String> {
+    let settings = load_settings(&app)?;
+    let root = resolve_storage_root(&app, &settings)?;
+    let cc = &settings.case_cache;
+
+    if !cc.enabled {
+        return Err("кэш дел отключён в настройках (case_cache.enabled = false)".into());
+    }
+    let base_url = settings
+        .sync
+        .server_base_url
+        .clone()
+        .ok_or("не задан адрес сервера ex_system (sync.server_base_url)")?;
+    let token = std::env::var(OPERATOR_TOKEN_ENV)
+        .ok()
+        .filter(|t| !t.is_empty())
+        .ok_or("нет операторского токена (COURT_AUDIO_OPERATOR_TOKEN) — выполните вход оператора")?;
+
+    let fetcher = DocketHttpFetcher::new(base_url, token)?;
+    let cache = case_cache::sync_into_cache(&fetcher, &cc.scope, cc.max_records, now_unix_ms())
+        .map_err(|e| e.to_string())?;
+    case_cache::save(&root, cc, settings.storage.key_source, &cache).map_err(|e| e.to_string())?;
+
+    Ok(CaseCacheStatus {
+        is_fresh: cache.is_fresh(cc.ttl_hours, now_unix_ms()),
+        record_count: cache.records.len() as u32,
+        scope: cache.scope.clone(),
+        synced_at_unix_ms: Some(cache.synced_at_unix_ms),
+    })
 }
 
 /// Привязать (или уточнить/снять) дело у записи в каталоге `dir`.

@@ -14,6 +14,7 @@
 //! разделы «Выгрузка и сеть», «Аутентификация»); магических чисел нет.
 
 pub mod client;
+pub mod docket;
 pub mod queue;
 pub mod scheduler;
 pub mod uploader;
