@@ -115,22 +115,34 @@ describe('RecordScreen', () => {
     await waitFor(() => expect(stopped).toHaveBeenCalledTimes(1));
   });
 
-  it('показывает индикатор сохранения в фазе остановки', async () => {
+  it('показывает индикатор сохранения сразу после подтверждения стопа', async () => {
     wireDefaults();
+    // Стоп «висит» (финализация идёт) — индикатор должен появиться, не
+    // дожидаясь backend-события capture_state.
+    let resolveStop: ((v: unknown) => void) | null = null;
+    setInvoke('stop_capture', () => new Promise((res) => (resolveStop = res)));
     renderRecord();
     await screen.findByText('Готов к записи');
-
     await act(async () => {
       emitEvent('capture_state', { state: 'recording' });
     });
-    // Фаза финализации после подтверждения стопа.
-    await act(async () => {
-      emitEvent('capture_state', { state: 'stopping' });
-    });
+
+    // Подтверждаем остановку в модальном окне.
+    fireEvent.click(screen.getByText('■ Стоп'));
+    fireEvent.click(await screen.findByText('Остановить'));
+
     expect(await screen.findByText('Сохранение записи…')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
     // Кнопка «Старт» в фазе сохранения не показывается.
     expect(screen.queryByText('● Старт записи')).not.toBeInTheDocument();
+
+    // Завершаем финализацию — индикатор исчезает.
+    await act(async () => {
+      resolveStop?.([]);
+    });
+    await waitFor(() =>
+      expect(screen.queryByText('Сохранение записи…')).not.toBeInTheDocument(),
+    );
   });
 
   it('не предлагает восстановить текущую идущую сессию', async () => {

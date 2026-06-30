@@ -266,6 +266,10 @@ export function RecordScreen() {
   }, [binding]);
 
   const onStop = useCallback(async () => {
+    // Показываем фазу сохранения сразу, не дожидаясь backend-события
+    // `capture_state: stopping`: синхронная команда может задержать доставку
+    // события в webview до своего возврата, и индикатор бы не появился.
+    setState('stopping');
     try {
       await stopCapture();
       setState('stopped');
@@ -273,6 +277,10 @@ export function RecordScreen() {
       setSessionInfo(null);
       setLevel({ channels: [] });
     } catch (e) {
+      // Стоп забрал сессию из состояния ядра — активной записи уже нет.
+      setState('stopped');
+      setStartedAtMs(null);
+      setSessionInfo(null);
       setError(describeError(e));
     }
   }, []);
