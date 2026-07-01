@@ -99,7 +99,9 @@ pub fn sync_case_cache(app: AppHandle) -> Result<CaseCacheStatus, String> {
     let token = std::env::var(OPERATOR_TOKEN_ENV)
         .ok()
         .filter(|t| !t.is_empty())
-        .ok_or("нет операторского токена (COURT_AUDIO_OPERATOR_TOKEN) — выполните вход оператора")?;
+        .ok_or(
+            "нет операторского токена (COURT_AUDIO_OPERATOR_TOKEN) — выполните вход оператора",
+        )?;
 
     let fetcher = DocketHttpFetcher::new(base_url, token)?;
     let cache = case_cache::sync_into_cache(&fetcher, &cc.scope, cc.max_records, now_unix_ms())
