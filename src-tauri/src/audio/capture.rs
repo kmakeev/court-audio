@@ -56,10 +56,13 @@ pub struct ChannelLevel {
     pub rms: f32,
 }
 
-/// Событие индикатора уровня — по каналу на дорожку (v1 обычно 1, но многоканал
-/// предусмотрен: UI рисует по столбику на канал).
+/// Событие индикатора уровня. `track_id` относит уровни к дорожке (многоканал —
+/// этап 09; для одноканальной записи всегда `0`). `channels` — по столбику на
+/// записываемый канал дорожки (в многоканале дорожка моно → один столбик).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct LevelEvent {
+    #[serde(default)]
+    pub track_id: u32,
     pub channels: Vec<ChannelLevel>,
 }
 
@@ -116,6 +119,11 @@ pub struct CaptureParams {
     pub flush_interval_ms: u32,
     /// Каталог сессии для сегментов (резолвится из `storage.root_path`).
     pub output_dir: PathBuf,
+    /// Многоканал (этап 09): канал дорожки для извлечения из потока устройства
+    /// (`None` → downmix v1).
+    pub channel_index: Option<u16>,
+    /// Дорожка захвата (многоканал). Для одноканального пути — `0`.
+    pub track_id: u32,
 }
 
 /// Конфигурация надёжности захвата (этап 02). Все поля опциональны: `none()`
@@ -205,6 +213,12 @@ pub struct ConsumerConfig {
     pub output_dir: PathBuf,
     /// Размер рабочего буфера чтения (= ёмкость кольцевого буфера).
     pub scratch_len: usize,
+    /// Многоканал (этап 09): если задан — из интерливнутого потока извлекается
+    /// именно этот канал дорожки (`convert::select_channel`), а не downmix.
+    /// `None` → поведение v1 (downmix к `target_channels`).
+    pub channel_index: Option<u16>,
+    /// Дорожка, к которой относятся сегменты/уровни (многоканал). Для v1 — `0`.
+    pub track_id: u32,
 }
 
 /// Команды потоку захвата.
@@ -266,6 +280,8 @@ impl CaptureSession {
             level_update_hz: params.level_update_hz,
             output_dir: params.output_dir.clone(),
             scratch_len: consumer.capacity(),
+            channel_index: params.channel_index,
+            track_id: params.track_id,
         };
 
         // Зеркало создаём заранее (best-effort): сбой подготовки не валит запись.
@@ -498,13 +514,13 @@ fn run_monitor(
         let n = consumer.pop_slice(&mut scratch);
         if n > 0 {
             if last_emit.elapsed() >= poll {
-                level_cb(levels_of(&scratch[..n], native_channels));
+                level_cb(levels_of(&scratch[..n], native_channels, 0));
                 last_emit = Instant::now();
             }
             continue;
         }
         if last_emit.elapsed() >= poll {
-            level_cb(levels_of(&[], native_channels));
+            level_cb(levels_of(&[], native_channels, 0));
             last_emit = Instant::now();
         }
         thread::sleep(poll);
@@ -858,12 +874,16 @@ pub fn run_consumer(
     'run: loop {
         let n = consumer.pop_slice(&mut scratch);
         if n > 0 {
-            let mono = convert::downmix(&scratch[..n], cfg.native_channels, cfg.target_channels);
+            // Многоканал: извлекаем канал дорожки; иначе (v1) — downmix к target.
+            let mono = match cfg.channel_index {
+                Some(ci) => convert::select_channel(&scratch[..n], cfg.native_channels, ci),
+                None => convert::downmix(&scratch[..n], cfg.native_channels, cfg.target_channels),
+            };
             let pcm = convert::quantize_i16(&mono);
             writer.write_samples(&pcm)?;
             if last_emit.elapsed() >= poll {
-                // Уровни — по записываемым (target) каналам.
-                level_cb(levels_of(&mono, cfg.target_channels));
+                // Уровни — по записываемым (target) каналам дорожки.
+                level_cb(levels_of(&mono, cfg.target_channels, cfg.track_id));
                 last_emit = Instant::now();
             }
             writer.maybe_flush()?;
@@ -906,7 +926,7 @@ pub fn run_consumer(
             break;
         }
         if last_emit.elapsed() >= poll {
-            level_cb(levels_of(&[], cfg.target_channels));
+            level_cb(levels_of(&[], cfg.target_channels, cfg.track_id));
             last_emit = Instant::now();
         }
         writer.maybe_flush()?;
@@ -968,7 +988,7 @@ fn check_disk(rel: &ConsumerReliability, last: &mut DiskStatus) -> DiskStatus {
 
 /// Уровни по каналам для интерливнутого буфера (`channels` дорожек). Пустой
 /// буфер даёт нули по каждому каналу — UI продолжает рисовать N столбиков.
-fn levels_of(samples: &[f32], channels: u16) -> LevelEvent {
+fn levels_of(samples: &[f32], channels: u16, track_id: u32) -> LevelEvent {
     let ch = channels.max(1) as usize;
     let mut peak = vec![0.0f32; ch];
     let mut sumsq = vec![0.0f64; ch];
@@ -992,7 +1012,7 @@ fn levels_of(samples: &[f32], channels: u16) -> LevelEvent {
             },
         })
         .collect();
-    LevelEvent { channels }
+    LevelEvent { track_id, channels }
 }
 
 #[cfg(test)]
@@ -1001,7 +1021,7 @@ mod tests {
 
     #[test]
     fn levels_of_empty_is_zero_per_channel() {
-        let l = levels_of(&[], 1);
+        let l = levels_of(&[], 1, 0);
         assert_eq!(l.channels.len(), 1);
         assert_eq!(l.channels[0].peak, 0.0);
         assert_eq!(l.channels[0].rms, 0.0);
@@ -1009,7 +1029,7 @@ mod tests {
 
     #[test]
     fn levels_of_constant_mono_signal() {
-        let l = levels_of(&[0.5, -0.5, 0.5, -0.5], 1);
+        let l = levels_of(&[0.5, -0.5, 0.5, -0.5], 1, 0);
         assert_eq!(l.channels.len(), 1);
         assert!((l.channels[0].peak - 0.5).abs() < 1e-6);
         assert!((l.channels[0].rms - 0.5).abs() < 1e-6);
@@ -1018,9 +1038,15 @@ mod tests {
     #[test]
     fn levels_of_splits_interleaved_channels() {
         // Канал 0 громкий (±0.8), канал 1 тихий (±0.1); интерлив L,R,L,R.
-        let l = levels_of(&[0.8, 0.1, -0.8, -0.1], 2);
+        let l = levels_of(&[0.8, 0.1, -0.8, -0.1], 2, 0);
         assert_eq!(l.channels.len(), 2);
         assert!((l.channels[0].peak - 0.8).abs() < 1e-6);
         assert!((l.channels[1].peak - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn levels_of_carries_track_id() {
+        let l = levels_of(&[0.2], 1, 3);
+        assert_eq!(l.track_id, 3);
     }
 }

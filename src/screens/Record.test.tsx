@@ -56,6 +56,36 @@ describe('RecordScreen', () => {
     expect((await screen.findAllByText('Пауза')).length).toBeGreaterThan(0);
   });
 
+  it('многоканал: рисует пофайловые метры по дорожкам с ролями', async () => {
+    wireDefaults();
+    // Настройки с включённым многоканалом и двумя дорожками по ролям.
+    setInvoke('get_settings', () => {
+      const s = settingsFixture();
+      s.audio.multichannel.enabled = true;
+      s.audio.tracks = [
+        { device: null, channel_index: 0, role: 'judge', label: '' },
+        { device: null, channel_index: 1, role: 'defense', label: 'Защита' },
+      ];
+      return s;
+    });
+    renderRecord();
+    await screen.findByText('Готов к записи');
+
+    await act(async () => {
+      emitEvent('capture_state', { state: 'recording' });
+    });
+    // Подпись дорожки 1 = роль (label пуст), дорожки 2 = метка.
+    expect(await screen.findByText('Дорожка 1 · judge')).toBeInTheDocument();
+    expect(await screen.findByText('Дорожка 2 · Защита')).toBeInTheDocument();
+
+    // Уровень дорожки 1 обновляется независимо (событие несёт track_id).
+    await act(async () => {
+      emitEvent('audio_level', { track_id: 0, channels: [{ peak: 0.5, rms: 0.3 }] });
+    });
+    // Метры обеих дорожек присутствуют (по одному meter на дорожку минимум).
+    expect((await screen.findAllByRole('meter')).length).toBeGreaterThanOrEqual(2);
+  });
+
   it('индикатор уровня реагирует на audio_level и показывает клиппинг', async () => {
     wireDefaults();
     renderRecord();

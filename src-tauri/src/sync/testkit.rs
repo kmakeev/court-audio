@@ -35,9 +35,9 @@ struct FakeState {
     init_calls: u32,
     complete_calls: u32,
     /// Принятые части по `(recording_id, part_index)` — проверка идемпотентности.
-    received: HashSet<(String, u32)>,
+    received: HashSet<(String, u32, u32)>,
     /// Байты последней принятой версии части (контроль контента).
-    bytes: HashMap<(String, u32), Vec<u8>>,
+    bytes: HashMap<(String, u32, u32), Vec<u8>>,
     /// Уже «израсходованные» одноразовые сбои частей.
     transient_once_used: HashSet<u32>,
     register_fails_left: u32,
@@ -81,13 +81,23 @@ impl FakeTransport {
         self.state.lock().unwrap().received.len()
     }
 
-    /// Принята ли конкретная часть.
+    /// Принята ли конкретная часть (по индексу, на любой дорожке).
     pub fn has_part(&self, part_index: u32) -> bool {
         self.state
             .lock()
             .unwrap()
             .received
-            .contains(&(self.recording_id.clone(), part_index))
+            .iter()
+            .any(|(rid, _tid, idx)| rid == &self.recording_id && *idx == part_index)
+    }
+
+    /// Принята ли часть конкретной дорожки.
+    pub fn has_track_part(&self, track_id: u32, part_index: u32) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .received
+            .contains(&(self.recording_id.clone(), track_id, part_index))
     }
 
     /// Число вызовов `complete_upload` (контроль финализации).
@@ -115,7 +125,7 @@ impl UploadTransport for FakeTransport {
         &self,
         _token: &str,
         _recording_id: &str,
-        _segments: &[crate::store::export::SegmentEntry],
+        _tracks: &[crate::store::export::TrackEntry],
     ) -> Result<(), TransportError> {
         let mut st = self.state.lock().unwrap();
         if st.init_fails_left > 0 {
@@ -130,6 +140,7 @@ impl UploadTransport for FakeTransport {
         &self,
         _token: &str,
         recording_id: &str,
+        track_id: u32,
         part_index: u32,
         bytes: &[u8],
     ) -> Result<(), TransportError> {
@@ -148,9 +159,10 @@ impl UploadTransport for FakeTransport {
             )));
         }
         // Идемпотентность: повторный приём той же части не дублирует.
-        st.received.insert((recording_id.to_string(), part_index));
+        st.received
+            .insert((recording_id.to_string(), track_id, part_index));
         st.bytes
-            .insert((recording_id.to_string(), part_index), bytes.to_vec());
+            .insert((recording_id.to_string(), track_id, part_index), bytes.to_vec());
         Ok(())
     }
 

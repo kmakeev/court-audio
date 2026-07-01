@@ -12,6 +12,11 @@ export function settingsFixture(): Settings {
       channels: 1,
       master_codec: 'wav_pcm',
       archive_copy: { enabled: false, codec: 'flac' },
+      multichannel: { enabled: false },
+      tracks: [],
+      roles: ['judge', 'clerk', 'prosecution', 'defense', 'witness', 'room'],
+      sync: { clock_master_track: 0, drift_threshold_ms: 50, drift_compensate: true },
+      master_downmix: { enabled: false },
     },
     recorder: { segment_seconds: 30, flush_interval_ms: 1500, max_session_hours: 12 },
     reliability: {

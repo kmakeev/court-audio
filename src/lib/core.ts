@@ -30,8 +30,12 @@ export interface ChannelLevel {
   rms: number;
 }
 
-/** `audio_level` — уровни по каналам (capture::LevelEvent; v1 обычно 1 канал). */
+/**
+ * `audio_level` — уровни по каналам (capture::LevelEvent). `track_id` относит
+ * событие к дорожке (многоканал — этап 09; для v1 всегда 0).
+ */
 export interface LevelEvent {
+  track_id?: number;
   channels: ChannelLevel[];
 }
 

@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::export::SegmentEntry;
+use crate::store::export::TrackEntry;
 
 /// Класс ошибки транспорта: временная (ретраить) или постоянная (не ретраить).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,13 @@ pub struct SessionMeta {
     pub sample_rate_hz: u32,
     pub channels: u16,
     pub bit_depth: u16,
+    /// Число дорожек записи (многоканал по ролям — этап 09; для v1 = 1).
+    #[serde(default = "one_track")]
+    pub track_count: u32,
+}
+
+fn one_track() -> u32 {
+    1
 }
 
 /// Результат серверной верификации целостности (`POST /audio/recordings/<id>/verify/`).
@@ -83,19 +90,22 @@ pub trait UploadTransport: Send + Sync {
     /// по `meta.session_id`).
     fn register_session(&self, token: &str, meta: &SessionMeta) -> Result<String, TransportError>;
 
-    /// Заявить состав сегментов (размеры + SHA-256 + звенья цепочки).
+    /// Заявить состав записи: **дорожки** с ролями и их сегментами (размеры +
+    /// SHA-256 + звенья цепочки). Роли доходят до диаризации W2.11 (этап 09).
     fn init_upload(
         &self,
         token: &str,
         recording_id: &str,
-        segments: &[SegmentEntry],
+        tracks: &[TrackEntry],
     ) -> Result<(), TransportError>;
 
-    /// Передать часть `part_index` (идемпотентно: повтор безопасен — докачка).
+    /// Передать часть `(track_id, part_index)` (идемпотентно: повтор безопасен —
+    /// докачка). Часть адресуется по дорожке (многоканал — этап 09).
     fn upload_part(
         &self,
         token: &str,
         recording_id: &str,
+        track_id: u32,
         part_index: u32,
         bytes: &[u8],
     ) -> Result<(), TransportError>;
@@ -173,13 +183,13 @@ impl UploadTransport for HttpTransport {
         &self,
         token: &str,
         recording_id: &str,
-        segments: &[SegmentEntry],
+        tracks: &[TrackEntry],
     ) -> Result<(), TransportError> {
         let resp = self
             .client
             .post(self.url(&format!("audio/recordings/{recording_id}/upload/init/")))
             .bearer_auth(token)
-            .json(&serde_json::json!({ "segments": segments }))
+            .json(&serde_json::json!({ "tracks": tracks }))
             .send()
             .map_err(classify_send)?;
         check_status(resp).map(|_| ())
@@ -189,13 +199,14 @@ impl UploadTransport for HttpTransport {
         &self,
         token: &str,
         recording_id: &str,
+        track_id: u32,
         part_index: u32,
         bytes: &[u8],
     ) -> Result<(), TransportError> {
         let resp = self
             .client
             .put(self.url(&format!(
-                "audio/recordings/{recording_id}/upload/part/{part_index}/"
+                "audio/recordings/{recording_id}/upload/part/{track_id}/{part_index}/"
             )))
             .bearer_auth(token)
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")

@@ -42,6 +42,54 @@ pub fn downmix(input: &[f32], native_channels: u16, target_channels: u16) -> Vec
     out
 }
 
+/// Выбрать один канал `channel_index` (0-based) из интерливнутого потока
+/// `native_channels` каналов — извлечение дорожки многоканала (этап 09,
+/// `promts/09_multichannel.md`, шаг 2). Неполный «хвостовой» кадр отбрасывается.
+///
+/// Если `channel_index >= native_channels`, канал считается отсутствующим и
+/// возвращается тишина той же длины по кадрам (устойчивость к рассогласованию
+/// конфигурации и реального формата устройства).
+pub fn select_channel(input: &[f32], native_channels: u16, channel_index: u16) -> Vec<f32> {
+    debug_assert!(native_channels >= 1, "native_channels должно быть >= 1");
+    let n = native_channels as usize;
+    let ch = channel_index as usize;
+    let frames = input.len() / n;
+    let mut out = Vec::with_capacity(frames);
+    if ch >= n {
+        out.resize(frames, 0.0);
+        return out;
+    }
+    for frame in input.chunks_exact(n) {
+        out.push(frame[ch]);
+    }
+    out
+}
+
+/// Свести N синхронных моно-дорожек в один мастер усреднением (опц.
+/// `audio.master_downmix`, этап 09). Дорожки могут различаться по длине (дрейф/
+/// обрыв) — микс идёт по максимальной длине, отсутствующие семплы считаются
+/// тишиной; делитель на каждом отсчёте — число дорожек, реально имеющих семпл.
+pub fn mix_tracks(tracks: &[&[i16]]) -> Vec<i16> {
+    if tracks.is_empty() {
+        return Vec::new();
+    }
+    let len = tracks.iter().map(|t| t.len()).max().unwrap_or(0);
+    let mut out = Vec::with_capacity(len);
+    for i in 0..len {
+        let mut sum: i32 = 0;
+        let mut present: i32 = 0;
+        for t in tracks {
+            if let Some(&s) = t.get(i) {
+                sum += s as i32;
+                present += 1;
+            }
+        }
+        let mixed = if present > 0 { sum / present } else { 0 };
+        out.push(mixed as i16);
+    }
+    out
+}
+
 /// Квантование нормированных `f32`-семплов (`[-1.0, 1.0]`) в PCM `i16` с
 /// клиппингом выходящих за диапазон значений. NaN трактуется как тишина (0).
 pub fn quantize_i16(input: &[f32]) -> Vec<i16> {
@@ -114,5 +162,50 @@ mod tests {
     #[test]
     fn quantize_empty_input_does_not_panic() {
         assert!(quantize_i16(&[]).is_empty());
+    }
+
+    #[test]
+    fn select_channel_picks_requested_lane() {
+        // [L,R, L,R] -> канал 0 = [L,L], канал 1 = [R,R].
+        let input = [1.0, 0.25, 0.5, -0.5];
+        assert_eq!(select_channel(&input, 2, 0), vec![1.0, 0.5]);
+        assert_eq!(select_channel(&input, 2, 1), vec![0.25, -0.5]);
+    }
+
+    #[test]
+    fn select_channel_drops_incomplete_trailing_frame() {
+        let input = [1.0, 2.0, 3.0, 4.0, 5.0]; // 4-канальный: 1 полный кадр + хвост
+        assert_eq!(select_channel(&input, 4, 2), vec![3.0]);
+    }
+
+    #[test]
+    fn select_channel_missing_channel_is_silence() {
+        // Запрошен канал вне числа каналов устройства → тишина по кадрам.
+        let input = [1.0, 2.0, 3.0, 4.0];
+        assert_eq!(select_channel(&input, 2, 5), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn mix_tracks_averages_equal_length() {
+        let a: Vec<i16> = vec![100, -100, 0];
+        let b: Vec<i16> = vec![300, 100, 40];
+        let mixed = mix_tracks(&[&a, &b]);
+        assert_eq!(mixed, vec![200, 0, 20]);
+    }
+
+    #[test]
+    fn mix_tracks_handles_ragged_lengths() {
+        // Вторая дорожка короче (обрыв/дрейф): недостающие семплы = тишина,
+        // делитель — число реально присутствующих дорожек на отсчёте.
+        let a: Vec<i16> = vec![100, 200, 300];
+        let b: Vec<i16> = vec![100];
+        let mixed = mix_tracks(&[&a, &b]);
+        assert_eq!(mixed, vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn mix_tracks_empty_input_is_empty() {
+        let empty: Vec<&[i16]> = Vec::new();
+        assert!(mix_tracks(&empty).is_empty());
     }
 }

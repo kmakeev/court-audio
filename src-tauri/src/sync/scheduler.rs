@@ -93,6 +93,7 @@ mod tests {
             .append_segment(
                 id,
                 &SegmentRecord {
+                    track_id: 0,
                     index: 1,
                     path: name.into(),
                     started_at_unix_ms: 1,

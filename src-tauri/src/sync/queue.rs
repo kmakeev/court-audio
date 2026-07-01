@@ -36,9 +36,11 @@ impl PartState {
     }
 }
 
-/// Часть выгрузки (= сегмент записи) с трекингом докачки.
+/// Часть выгрузки (= сегмент дорожки) с трекингом докачки. Часть адресуется по
+/// `(track_id, part_index)` — многоканал (этап 09).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PartRow {
+    pub track_id: u32,
     pub part_index: u32,
     pub size_bytes: u64,
     pub sha256: String,
@@ -88,42 +90,52 @@ pub fn init_parts_from_manifest(
          VALUES (?1, NULL, 0)",
         rusqlite::params![session_id],
     )?;
-    for seg in &manifest.segments {
-        conn.execute(
-            "INSERT OR IGNORE INTO upload_parts
-                (session_id, part_index, size_bytes, sha256, state, attempts, last_error)
-             VALUES (?1, ?2, ?3, ?4, 'pending', 0, NULL)",
-            rusqlite::params![session_id, seg.index, seg.size_bytes as i64, seg.sha256],
-        )?;
+    for track in &manifest.tracks {
+        for seg in &track.segments {
+            conn.execute(
+                "INSERT OR IGNORE INTO upload_parts
+                    (session_id, track_id, part_index, size_bytes, sha256, state, attempts, last_error)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, NULL)",
+                rusqlite::params![
+                    session_id,
+                    track.track_id,
+                    seg.index,
+                    seg.size_bytes as i64,
+                    seg.sha256
+                ],
+            )?;
+        }
     }
     Ok(())
 }
 
-/// Части записи в порядке индекса.
+/// Части записи по всем дорожкам в порядке `(track_id, part_index)`.
 pub fn all_parts(store: &ManifestStore, session_id: &str) -> Result<Vec<PartRow>, StoreError> {
     let conn = store.conn();
     let mut stmt = conn.prepare(
-        "SELECT part_index, size_bytes, sha256, state, attempts
-         FROM upload_parts WHERE session_id = ?1 ORDER BY part_index ASC",
+        "SELECT track_id, part_index, size_bytes, sha256, state, attempts
+         FROM upload_parts WHERE session_id = ?1 ORDER BY track_id ASC, part_index ASC",
     )?;
     let rows = stmt.query_map([session_id], |row| {
-        let state_code: String = row.get(3)?;
+        let state_code: String = row.get(4)?;
         Ok((
             row.get::<_, i64>(0)? as u32,
-            row.get::<_, i64>(1)? as u64,
-            row.get::<_, String>(2)?,
+            row.get::<_, i64>(1)? as u32,
+            row.get::<_, i64>(2)? as u64,
+            row.get::<_, String>(3)?,
             state_code,
-            row.get::<_, i64>(4)? as u32,
+            row.get::<_, i64>(5)? as u32,
         ))
     })?;
     let mut out = Vec::new();
     for r in rows {
-        let (part_index, size_bytes, sha256, state_code, attempts) = r?;
+        let (track_id, part_index, size_bytes, sha256, state_code, attempts) = r?;
         let state = match state_code.as_str() {
             "sent" => PartState::Sent,
             _ => PartState::Pending,
         };
         out.push(PartRow {
+            track_id,
             part_index,
             size_bytes,
             sha256,
@@ -150,13 +162,14 @@ pub fn progress(store: &ManifestStore, session_id: &str) -> Result<PartProgress,
     Ok(PartProgress { total, sent })
 }
 
-/// Отметить часть принятой сервером.
+/// Отметить часть дорожки принятой сервером.
 pub fn mark_part_sent(
     store: &ManifestStore,
     session_id: &str,
+    track_id: u32,
     part_index: u32,
 ) -> Result<(), StoreError> {
-    set_part_state(store, session_id, part_index, PartState::Sent, None)
+    set_part_state(store, session_id, track_id, part_index, PartState::Sent, None)
 }
 
 /// Зафиксировать неуспешную попытку части (инкремент `attempts` + текст ошибки),
@@ -164,13 +177,14 @@ pub fn mark_part_sent(
 pub fn record_part_attempt(
     store: &ManifestStore,
     session_id: &str,
+    track_id: u32,
     part_index: u32,
     error: &str,
 ) -> Result<(), StoreError> {
     store.conn().execute(
-        "UPDATE upload_parts SET attempts = attempts + 1, last_error = ?3
-         WHERE session_id = ?1 AND part_index = ?2",
-        rusqlite::params![session_id, part_index, error],
+        "UPDATE upload_parts SET attempts = attempts + 1, last_error = ?4
+         WHERE session_id = ?1 AND track_id = ?2 AND part_index = ?3",
+        rusqlite::params![session_id, track_id, part_index, error],
     )?;
     Ok(())
 }
@@ -178,14 +192,15 @@ pub fn record_part_attempt(
 fn set_part_state(
     store: &ManifestStore,
     session_id: &str,
+    track_id: u32,
     part_index: u32,
     state: PartState,
     error: Option<&str>,
 ) -> Result<(), StoreError> {
     store.conn().execute(
-        "UPDATE upload_parts SET state = ?3, last_error = ?4
-         WHERE session_id = ?1 AND part_index = ?2",
-        rusqlite::params![session_id, part_index, state.as_code(), error],
+        "UPDATE upload_parts SET state = ?4, last_error = ?5
+         WHERE session_id = ?1 AND track_id = ?2 AND part_index = ?3",
+        rusqlite::params![session_id, track_id, part_index, state.as_code(), error],
     )?;
     Ok(())
 }
@@ -258,12 +273,41 @@ pub fn reset_for_retry(store: &ManifestStore, session_id: &str) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::export::{IntegrityMeta, RecordingManifest, SegmentEntry, SessionMeta};
+    use crate::store::export::{
+        IntegrityMeta, RecordingManifest, SegmentEntry, SessionMeta, TrackEntry,
+    };
     use crate::store::manifest::SessionStatus;
 
+    /// Манифест с одной дорожкой (`single`) на `n` сегментов.
     fn manifest_with_segments(n: u32) -> RecordingManifest {
+        manifest_with_tracks(&[(0, "single", n)])
+    }
+
+    /// Манифест с заданными дорожками `(track_id, role, кол-во сегментов)`.
+    fn manifest_with_tracks(spec: &[(u32, &str, u32)]) -> RecordingManifest {
+        let tracks = spec
+            .iter()
+            .map(|(tid, role, n)| TrackEntry {
+                track_id: *tid,
+                role: role.to_string(),
+                label: role.to_string(),
+                final_chain_link: Some(format!("final{tid}")),
+                segments: (1..=*n)
+                    .map(|i| SegmentEntry {
+                        track_id: *tid,
+                        index: i,
+                        sha256: format!("hash{tid}-{i}"),
+                        chain_link: format!("link{tid}-{i}"),
+                        size_bytes: 1000 * i as u64,
+                        frames: 100 * i as u64,
+                        started_at_unix_ms: i as u64,
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let track_count = tracks.len() as u32;
         RecordingManifest {
-            manifest_version: 1,
+            manifest_version: 2,
             session: SessionMeta {
                 id: "s1".into(),
                 started_at_unix_ms: 1,
@@ -274,6 +318,7 @@ mod tests {
                 sample_rate_hz: 44_100,
                 channels: 1,
                 bit_depth: 16,
+                track_count,
                 upload_status: UploadStatus::Pending,
                 final_chain_link: Some("link".into()),
             },
@@ -281,16 +326,7 @@ mod tests {
                 segment_hash: "sha256".into(),
                 hash_chain: true,
             },
-            segments: (1..=n)
-                .map(|i| SegmentEntry {
-                    index: i,
-                    sha256: format!("hash{i}"),
-                    chain_link: format!("link{i}"),
-                    size_bytes: 1000 * i as u64,
-                    frames: 100 * i as u64,
-                    started_at_unix_ms: i as u64,
-                })
-                .collect(),
+            tracks,
             events: vec![],
         }
     }
@@ -319,13 +355,39 @@ mod tests {
         init_parts_from_manifest(&store, "s1", &m).unwrap();
         assert_eq!(pending_parts(&store, "s1").unwrap().len(), 3);
 
-        // Отправили часть 1.
-        mark_part_sent(&store, "s1", 1).unwrap();
+        // Отправили часть 1 (дорожка 0).
+        mark_part_sent(&store, "s1", 0, 1).unwrap();
         // Повторный init не сбрасывает отправленную часть.
         init_parts_from_manifest(&store, "s1", &m).unwrap();
         let pending = pending_parts(&store, "s1").unwrap();
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].part_index, 2);
+        assert_eq!(
+            progress(&store, "s1").unwrap(),
+            PartProgress { total: 3, sent: 1 }
+        );
+    }
+
+    #[test]
+    fn multitrack_parts_are_tracked_per_track() {
+        let store = ManifestStore::in_memory().unwrap();
+        seed_session(&store, "s1");
+        // Две дорожки: judge (2 части) + defense (1 часть) = 3 части всего.
+        let m = manifest_with_tracks(&[(0, "judge", 2), (1, "defense", 1)]);
+        init_parts_from_manifest(&store, "s1", &m).unwrap();
+        assert_eq!(all_parts(&store, "s1").unwrap().len(), 3);
+
+        // Часть 1 дорожки judge и часть 1 дорожки defense — разные части.
+        mark_part_sent(&store, "s1", 0, 1).unwrap();
+        let pending = pending_parts(&store, "s1").unwrap();
+        assert_eq!(pending.len(), 2);
+        // Часть (0,1) отправлена, (0,2) и (1,1) — ещё нет.
+        assert!(pending
+            .iter()
+            .any(|p| p.track_id == 1 && p.part_index == 1));
+        assert!(pending
+            .iter()
+            .any(|p| p.track_id == 0 && p.part_index == 2));
         assert_eq!(
             progress(&store, "s1").unwrap(),
             PartProgress { total: 3, sent: 1 }
@@ -353,8 +415,8 @@ mod tests {
         let store = ManifestStore::in_memory().unwrap();
         seed_session(&store, "s1");
         init_parts_from_manifest(&store, "s1", &manifest_with_segments(1)).unwrap();
-        record_part_attempt(&store, "s1", 1, "нет сети").unwrap();
-        record_part_attempt(&store, "s1", 1, "нет сети").unwrap();
+        record_part_attempt(&store, "s1", 0, 1, "нет сети").unwrap();
+        record_part_attempt(&store, "s1", 0, 1, "нет сети").unwrap();
         let parts = all_parts(&store, "s1").unwrap();
         assert_eq!(parts[0].attempts, 2);
         assert_eq!(parts[0].state, PartState::Pending);

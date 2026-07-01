@@ -12,6 +12,7 @@
 
 import { Link } from 'react-router-dom';
 import type { CSSProperties, ReactNode } from 'react';
+import { InfoGlyph } from './InfoTip';
 
 type Variant = 'critical' | 'warning';
 
@@ -66,9 +67,27 @@ export function CriticalNotice({
       }}
     >
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, lineHeight: 1.4, marginBottom: description ? 4 : 0 }}>
-          {variant === 'critical' ? '⚠ ' : 'ⓘ '}
-          {title}
+        <div
+          style={{
+            fontWeight: 600,
+            fontSize: 13,
+            lineHeight: 1.4,
+            marginBottom: description ? 4 : 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          {/* Значок «инфо» — тот же контурный ⓘ, что в InfoTip (единый в программе);
+              для critical оставляем предупреждающий ⚠. */}
+          {variant === 'critical' ? (
+            <span aria-hidden="true">⚠</span>
+          ) : (
+            <span aria-hidden="true" style={{ display: 'inline-flex', flexShrink: 0 }}>
+              <InfoGlyph size={14} />
+            </span>
+          )}
+          <span>{title}</span>
         </div>
         {description && (
           <div style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.9 }}>{description}</div>

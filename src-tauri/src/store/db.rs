@@ -14,7 +14,7 @@ use super::StoreError;
 
 /// Текущая версия схемы манифеста. При изменении таблиц — инкремент + ветка в
 /// [`migrate`].
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Открыть (создав при необходимости) манифест-БД по пути и применить миграции.
 pub fn open(path: &Path) -> Result<Connection, StoreError> {
@@ -107,6 +107,69 @@ pub fn migrate(conn: &Connection) -> Result<(), StoreError> {
         )?;
         conn.pragma_update(None, "user_version", 2)?;
     }
+    if version < 3 {
+        // Этап 09 (многоканал по ролям): дорожки с ролями + per-track сегменты/
+        // выгрузка. Добавляем `tracks`; в `segments`/`upload_parts` вводим
+        // `track_id` (пересбор с новым PK). Легаси-сессии (моно) получают трек
+        // `track_id=0` роль `single`, а их сегменты/части — `track_id=0`.
+        // Таблицы `segments`/`upload_parts` ничем не референсятся — пересбор
+        // через *_new/DROP/RENAME безопасен при foreign_keys=ON.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tracks (
+                session_id       TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                track_id         INTEGER NOT NULL,
+                role             TEXT NOT NULL,
+                label            TEXT NOT NULL DEFAULT '',
+                source_device    TEXT,
+                source_channel   INTEGER NOT NULL DEFAULT 0,
+                final_chain_link TEXT,
+                PRIMARY KEY (session_id, track_id)
+            );
+            -- Легаси-сессии: одна дорожка track_id=0.
+            INSERT OR IGNORE INTO tracks (session_id, track_id, role, label, source_channel)
+                SELECT id, 0, 'single', '', 0 FROM sessions;
+
+            -- Пересбор segments с track_id и PK (session_id, track_id, idx).
+            CREATE TABLE segments_new (
+                session_id          TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                track_id            INTEGER NOT NULL DEFAULT 0,
+                idx                 INTEGER NOT NULL,
+                path                TEXT NOT NULL,
+                started_at_unix_ms  INTEGER NOT NULL,
+                frames              INTEGER NOT NULL,
+                size_bytes          INTEGER NOT NULL,
+                sha256              TEXT NOT NULL,
+                chain_link          TEXT NOT NULL,
+                PRIMARY KEY (session_id, track_id, idx)
+            );
+            INSERT INTO segments_new (session_id, track_id, idx, path, started_at_unix_ms,
+                                      frames, size_bytes, sha256, chain_link)
+                SELECT session_id, 0, idx, path, started_at_unix_ms,
+                       frames, size_bytes, sha256, chain_link FROM segments;
+            DROP TABLE segments;
+            ALTER TABLE segments_new RENAME TO segments;
+
+            -- Пересбор upload_parts с track_id и PK (session_id, track_id, part_index).
+            CREATE TABLE upload_parts_new (
+                session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                track_id    INTEGER NOT NULL DEFAULT 0,
+                part_index  INTEGER NOT NULL,
+                size_bytes  INTEGER NOT NULL,
+                sha256      TEXT NOT NULL,
+                state       TEXT NOT NULL,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                last_error  TEXT,
+                PRIMARY KEY (session_id, track_id, part_index)
+            );
+            INSERT INTO upload_parts_new (session_id, track_id, part_index, size_bytes,
+                                          sha256, state, attempts, last_error)
+                SELECT session_id, 0, part_index, size_bytes,
+                       sha256, state, attempts, last_error FROM upload_parts;
+            DROP TABLE upload_parts;
+            ALTER TABLE upload_parts_new RENAME TO upload_parts;",
+        )?;
+        conn.pragma_update(None, "user_version", 3)?;
+    }
     Ok(())
 }
 
@@ -144,6 +207,7 @@ mod tests {
             "events",
             "upload_state",
             "upload_parts",
+            "tracks",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -158,7 +222,9 @@ mod tests {
 
     #[test]
     fn migrate_v1_to_v2_preserves_sessions_and_adds_tables() {
-        // Симулируем БД схемы v1: только базовые таблицы + user_version=1.
+        // Симулируем БД схемы v1: базовые таблицы (как их создаёт ветка v1) +
+        // user_version=1. Включаем segments/events — реальная v1-БД их имеет, а
+        // цепочка миграций до v3 их пересобирает.
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE sessions (
@@ -168,6 +234,16 @@ mod tests {
                 bit_depth INTEGER NOT NULL, final_chain_link TEXT, upload_status TEXT NOT NULL,
                 server_integrity_verified INTEGER NOT NULL DEFAULT 0, confirmed_at_unix_ms INTEGER,
                 local_purged_at_unix_ms INTEGER
+            );
+            CREATE TABLE segments (
+                session_id TEXT NOT NULL, idx INTEGER NOT NULL, path TEXT NOT NULL,
+                started_at_unix_ms INTEGER NOT NULL, frames INTEGER NOT NULL,
+                size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, chain_link TEXT NOT NULL,
+                PRIMARY KEY (session_id, idx)
+            );
+            CREATE TABLE events (
+                session_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL,
+                at_unix_ms INTEGER NOT NULL, detail_json TEXT, PRIMARY KEY (session_id, seq)
             );",
         )
         .unwrap();
@@ -201,6 +277,78 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 1, "таблица {table} должна появиться после миграции");
         }
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrate_v2_to_v3_backfills_track_and_preserves_segments() {
+        // Схема v2: сессия + сегмент + часть выгрузки, track_id ещё нет.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, dir TEXT NOT NULL, started_at_unix_ms INTEGER NOT NULL,
+                status TEXT NOT NULL, station_id TEXT NOT NULL, operator_id TEXT NOT NULL,
+                adjudication_ref TEXT, sample_rate_hz INTEGER NOT NULL, channels INTEGER NOT NULL,
+                bit_depth INTEGER NOT NULL, final_chain_link TEXT, upload_status TEXT NOT NULL,
+                server_integrity_verified INTEGER NOT NULL DEFAULT 0, confirmed_at_unix_ms INTEGER,
+                local_purged_at_unix_ms INTEGER, upload_paused INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE segments (
+                session_id TEXT NOT NULL, idx INTEGER NOT NULL, path TEXT NOT NULL,
+                started_at_unix_ms INTEGER NOT NULL, frames INTEGER NOT NULL,
+                size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, chain_link TEXT NOT NULL,
+                PRIMARY KEY (session_id, idx)
+            );
+            CREATE TABLE upload_parts (
+                session_id TEXT NOT NULL, part_index INTEGER NOT NULL, size_bytes INTEGER NOT NULL,
+                sha256 TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT, PRIMARY KEY (session_id, part_index)
+            );
+            INSERT INTO sessions (id, dir, started_at_unix_ms, status, station_id, operator_id,
+                sample_rate_hz, channels, bit_depth, upload_status)
+                VALUES ('s1','/rec/s1',1,'stopped','st','op',44100,1,16,'pending');
+            INSERT INTO segments (session_id, idx, path, started_at_unix_ms, frames, size_bytes, sha256, chain_link)
+                VALUES ('s1',1,'seg1.wav',1,1000,2000,'h1','l1');
+            INSERT INTO upload_parts (session_id, part_index, size_bytes, sha256, state)
+                VALUES ('s1',1,2000,'h1','pending');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+
+        migrate(&conn).unwrap();
+
+        // Легаси-сессия получила дорожку track_id=0 роль single.
+        let (tid, role): (i64, String) = conn
+            .query_row(
+                "SELECT track_id, role FROM tracks WHERE session_id='s1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tid, 0);
+        assert_eq!(role, "single");
+        // Сегмент цел и получил track_id=0.
+        let (stid, sha): (i64, String) = conn
+            .query_row(
+                "SELECT track_id, sha256 FROM segments WHERE session_id='s1' AND idx=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stid, 0);
+        assert_eq!(sha, "h1");
+        // Часть выгрузки цела и получила track_id=0.
+        let ptid: i64 = conn
+            .query_row(
+                "SELECT track_id FROM upload_parts WHERE session_id='s1' AND part_index=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ptid, 0);
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

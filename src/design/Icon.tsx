@@ -55,6 +55,9 @@ export type IconName =
   | 'icon-calculate'
   | 'icon-bell'
   | 'icon-feedback'
+  // App-local (court-audio): нет в снапшоте PravoUI, добавлены в public/icons.svg
+  | 'icon-settings'
+  | 'icon-activity'
   // Типы норм УК
   | 'icon-norm-article'
   | 'icon-norm-part'

@@ -12,6 +12,7 @@
 //! - [`recovery`] — обнаружение и починка незавершённой сессии при старте.
 
 pub mod journal;
+pub mod multitrack;
 pub mod recovery;
 pub mod segment_writer;
 pub mod session;

@@ -86,6 +86,24 @@ pub struct AudioSettings {
     /// `audio.level_update_hz` — частота событий индикаторов уровня (~20–30 Гц).
     pub level_update_hz: u32,
     pub archive_copy: ArchiveCopySettings,
+    // ── Многоканал по ролям (фаза 2, `promts/09_multichannel.md`) ──
+    // Новые поля с `#[serde(default)]`: конфиги v1 (без этих ключей) грузятся
+    // без ошибок и получают одноканальное поведение.
+    /// `audio.multichannel` — включение многоканального захвата.
+    #[serde(default)]
+    pub multichannel: MultichannelSettings,
+    /// `audio.tracks` — карта дорожек; пусто → один трек из `device`/`channels`.
+    #[serde(default)]
+    pub tracks: Vec<TrackConfig>,
+    /// `audio.roles` — справочник ролей дорожек (роль трека обязана быть отсюда).
+    #[serde(default = "default_roles")]
+    pub roles: Vec<String>,
+    /// `audio.sync` — единый клок и компенсация дрейфа между дорожками.
+    #[serde(default)]
+    pub sync: AudioSyncSettings,
+    /// `audio.master_downmix` — опц. сведённый мастер поверх пофайловых дорожек.
+    #[serde(default)]
+    pub master_downmix: MasterDownmixSettings,
 }
 
 impl Default for AudioSettings {
@@ -102,8 +120,73 @@ impl Default for AudioSettings {
             // configuration.md: audio.level_update_hz = 25
             level_update_hz: 25,
             archive_copy: ArchiveCopySettings::default(),
+            multichannel: MultichannelSettings::default(),
+            tracks: Vec::new(),
+            roles: default_roles(),
+            sync: AudioSyncSettings::default(),
+            master_downmix: MasterDownmixSettings::default(),
         }
     }
+}
+
+/// Судебные роли по умолчанию (`configuration.md` → `audio.roles`).
+fn default_roles() -> Vec<String> {
+    ["judge", "clerk", "prosecution", "defense", "witness", "room"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// `audio.multichannel` — тумблер многоканального режима.
+/// configuration.md: `audio.multichannel.enabled = false` (аддитивно, v1 по
+/// умолчанию — `Default` даёт `false`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MultichannelSettings {
+    pub enabled: bool,
+}
+
+/// Одна дорожка в карте «канал ↔ роль» (`audio.tracks[*]`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrackConfig {
+    /// Устройство источника; `None` — системное по умолчанию (как `audio.device`).
+    #[serde(default)]
+    pub device: Option<String>,
+    /// Индекс канала в интерливнутом потоке устройства (0-based).
+    #[serde(default)]
+    pub channel_index: u16,
+    /// Роль дорожки; обязана присутствовать в `audio.roles`.
+    pub role: String,
+    /// Человекочитаемая метка дорожки (для UI/имён файлов).
+    #[serde(default)]
+    pub label: String,
+}
+
+/// `audio.sync` — единый клок сессии и контроль дрейфа между дорожками.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioSyncSettings {
+    pub clock_master_track: u16,
+    pub drift_threshold_ms: u32,
+    pub drift_compensate: bool,
+}
+
+impl Default for AudioSyncSettings {
+    fn default() -> Self {
+        Self {
+            // configuration.md: audio.sync.clock_master_track = 0
+            clock_master_track: 0,
+            // configuration.md: audio.sync.drift_threshold_ms = 50
+            drift_threshold_ms: 50,
+            // configuration.md: audio.sync.drift_compensate = true
+            drift_compensate: true,
+        }
+    }
+}
+
+/// `audio.master_downmix` — опц. сведённый мастер поверх пофайловых дорожек.
+/// configuration.md: `audio.master_downmix.enabled = false` (`Default` → `false`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct MasterDownmixSettings {
+    pub enabled: bool,
 }
 
 // ── Запись и надёжность ────────────────────────────────────────────────────────
@@ -429,6 +512,31 @@ mod tests {
         assert!(s.integrity.hash_chain);
         assert_eq!(s.sync.chunk_size_mb, 8);
         assert_eq!(s.sync.retry.max_attempts, 0);
+        // Многоканал (фаза 2) — аддитивен, по умолчанию выключен.
+        assert!(!s.audio.multichannel.enabled);
+        assert!(s.audio.tracks.is_empty());
+        assert_eq!(
+            s.audio.roles,
+            vec!["judge", "clerk", "prosecution", "defense", "witness", "room"]
+        );
+        assert_eq!(s.audio.sync.clock_master_track, 0);
+        assert_eq!(s.audio.sync.drift_threshold_ms, 50);
+        assert!(s.audio.sync.drift_compensate);
+        assert!(!s.audio.master_downmix.enabled);
+    }
+
+    #[test]
+    fn v1_audio_json_without_multichannel_keys_loads() {
+        // Конфиг v1 не содержит ключей многоканала: должен грузиться и получать
+        // одноканальные дефолты (аддитивность).
+        let v1 = r#"{"audio":{"device":null,"sample_rate_hz":44100,"bit_depth":16,
+            "channels":1,"master_codec":"wav_pcm","capture_buffer_seconds":2.0,
+            "level_update_hz":25,"archive_copy":{"enabled":false,"codec":"flac"}}}"#;
+        let s: Settings = serde_json::from_str(v1).expect("v1 audio загружается");
+        assert!(!s.audio.multichannel.enabled);
+        assert!(s.audio.tracks.is_empty());
+        assert_eq!(s.audio.roles.len(), 6);
+        assert_eq!(s.audio, Settings::default().audio);
     }
 
     #[test]

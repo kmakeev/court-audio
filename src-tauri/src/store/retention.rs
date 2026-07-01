@@ -284,6 +284,7 @@ mod tests {
             .append_segment(
                 "s1",
                 &SegmentRecord {
+                    track_id: 0,
                     index: 1,
                     path: seg_path.to_str().unwrap().to_string(),
                     started_at_unix_ms: 1,

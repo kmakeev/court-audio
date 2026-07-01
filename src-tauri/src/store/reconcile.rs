@@ -10,11 +10,12 @@
 
 use std::path::{Path, PathBuf};
 
-use super::manifest::{ManifestStore, SegmentRecord, SessionRecord, SessionStatus};
+use super::manifest::{ManifestStore, SegmentRecord, SessionRecord, SessionStatus, TrackRecord};
 use super::StoreError;
 use crate::integrity::events::{EventKind, RecordingEvent};
 use crate::integrity::hash;
 use crate::recorder::journal::{self, CompletedSegment};
+use crate::recorder::multitrack;
 
 /// Реконсилировать сессию из её каталога. Возвращает id реконсилированной сессии
 /// или `None`, если каталог не содержит начатой сессии.
@@ -83,29 +84,49 @@ pub fn reconcile_session(store: &ManifestStore, dir: &Path) -> Result<Option<Str
     rec.status = status;
     store.insert_session(&rec)?;
 
-    reconcile_segments(store, &id, dir, &state.completed_segments)?;
+    // Многоканал (этап 09): при наличии карты дорожек сегменты живут в
+    // подкаталогах дорожек — реконсилируем per-track. Иначе — одноканальный
+    // путь v1 (сегменты из корневого журнала).
+    if let Some(map) = multitrack::read_track_map(dir) {
+        reconcile_tracks(store, &id, dir, &map)?;
+    } else {
+        reconcile_segments(store, &id, dir, &state.completed_segments)?;
+    }
     reconcile_events(store, &id, &meta.started_at_unix_ms, &state)?;
 
     Ok(Some(id))
 }
 
-/// Пересчитать SHA-256 и хеш-цепочку по файлам завершённых сегментов и записать
-/// их в манифест. Сегменты упорядочиваются по индексу.
+/// Пересчитать SHA-256 и хеш-цепочку по файлам завершённых сегментов
+/// одноканальной (v1) сессии и зафиксировать финальное звено сессии.
 fn reconcile_segments(
     store: &ManifestStore,
     session_id: &str,
     dir: &Path,
     completed: &[CompletedSegment],
 ) -> Result<(), StoreError> {
+    let final_link = reconcile_track_segments(store, session_id, 0, dir, completed)?;
+    if let Some(final_link) = final_link {
+        store.set_final_chain_link(session_id, &final_link)?;
+    }
+    Ok(())
+}
+
+/// Пересчитать SHA-256 и хеш-цепочку сегментов **одной дорожки** `track_id`
+/// (per-track целостность, этап 09). Возвращает финальное звено цепочки дорожки.
+/// Известные сегменты не пере-хешируются (дорого) — берём сохранённое звено.
+fn reconcile_track_segments(
+    store: &ManifestStore,
+    session_id: &str,
+    track_id: u32,
+    dir: &Path,
+    completed: &[CompletedSegment],
+) -> Result<Option<String>, StoreError> {
     let mut segs: Vec<&CompletedSegment> = completed.iter().collect();
     segs.sort_by_key(|s| s.index);
 
-    // Уже зафиксированные сегменты по индексу. Финализированный сегмент
-    // неизменяем, поэтому повторно его не хешируем (хеширование — самая дорогая
-    // часть реконсиляции): SHA-256 считаем только для НОВЫХ сегментов, для
-    // известных переиспользуем сохранённое звено хеш-цепочки.
     let known: std::collections::HashMap<u32, String> = store
-        .get_segments(session_id)?
+        .get_track_segments(session_id, track_id)?
         .into_iter()
         .map(|s| (s.index, s.chain_link))
         .collect();
@@ -122,6 +143,7 @@ fn reconcile_segments(
             store.append_segment(
                 session_id,
                 &SegmentRecord {
+                    track_id,
                     index: seg.index,
                     path: path.to_string_lossy().into_owned(),
                     started_at_unix_ms: 0, // журнал не хранит таймкод сегмента (этап 02)
@@ -135,9 +157,42 @@ fn reconcile_segments(
         };
         prev_link = Some(chain_link);
     }
+    Ok(prev_link)
+}
 
-    if let Some(final_link) = prev_link {
-        store.set_final_chain_link(session_id, &final_link)?;
+/// Реконсилировать дорожки многоканальной сессии из `tracks.json` (этап 09):
+/// вставить записи дорожек и per-track сегменты из журналов их подкаталогов,
+/// зафиксировать финальное звено цепочки каждой дорожки.
+fn reconcile_tracks(
+    store: &ManifestStore,
+    session_id: &str,
+    dir: &Path,
+    map: &multitrack::TrackMap,
+) -> Result<(), StoreError> {
+    for entry in &map.tracks {
+        store.insert_track(
+            session_id,
+            &TrackRecord {
+                track_id: entry.track_id,
+                role: entry.role.clone(),
+                label: entry.label.clone(),
+                source_device: entry.device.clone(),
+                source_channel: entry.channel_index,
+                final_chain_link: None,
+            },
+        )?;
+        let track_dir = multitrack::track_dir(dir, entry);
+        let journal_path = track_dir.join(journal::JOURNAL_FILE_NAME);
+        let completed = if journal_path.exists() {
+            journal::replay(&journal_path)?.completed_segments
+        } else {
+            Vec::new()
+        };
+        let final_link =
+            reconcile_track_segments(store, session_id, entry.track_id, &track_dir, &completed)?;
+        if let Some(link) = final_link {
+            store.set_track_final_chain_link(session_id, entry.track_id, &link)?;
+        }
     }
     Ok(())
 }
@@ -270,6 +325,95 @@ mod tests {
             &links,
             session.final_chain_link.as_deref()
         ));
+    }
+
+    /// Собрать многоканальную сессию на диске: корневой журнал (start/stop) +
+    /// `tracks.json` + подкаталоги дорожек со своими журналами и сегментами.
+    fn build_multitrack_dir(root: &Path, name: &str) -> PathBuf {
+        let dir = root.join(name);
+        // Корневой журнал сессии (общий таймкод, старт/стоп).
+        let mut journal = Journal::open(&dir).unwrap();
+        journal
+            .append(&JournalRecord::SessionStarted {
+                started_at_unix_ms: 1_700_000_000_000,
+                sample_rate_hz: 8_000,
+                channels: 2,
+                bit_depth: 16,
+                segment_seconds: 30,
+            })
+            .unwrap();
+
+        let map = multitrack::track_map_from_resolved(&[
+            crate::audio::tracks::ResolvedTrack {
+                track_id: 0,
+                device: None,
+                channel_index: 0,
+                role: "judge".into(),
+                label: "judge".into(),
+            },
+            crate::audio::tracks::ResolvedTrack {
+                track_id: 1,
+                device: None,
+                channel_index: 1,
+                role: "defense".into(),
+                label: "defense".into(),
+            },
+        ]);
+        multitrack::write_track_map(&dir, &map).unwrap();
+
+        // Дорожка judge — 2 сегмента, defense — 1 сегмент; каждая со своим журналом.
+        for (entry, n) in map.tracks.iter().zip([2u32, 1u32]) {
+            let tdir = multitrack::track_dir(&dir, entry);
+            let mut tj = Journal::open(&tdir).unwrap();
+            tj.append(&JournalRecord::SessionStarted {
+                started_at_unix_ms: 1_700_000_000_000,
+                sample_rate_hz: 8_000,
+                channels: 1,
+                bit_depth: 16,
+                segment_seconds: 30,
+            })
+            .unwrap();
+            for index in 1..=n {
+                let (file_name, frames) = write_segment(&tdir, 100 * index as usize);
+                tj.append(&JournalRecord::SegmentCompleted {
+                    index,
+                    path: file_name,
+                    frames,
+                })
+                .unwrap();
+            }
+            tj.append(&JournalRecord::Stopped).unwrap();
+        }
+        journal.append(&JournalRecord::Stopped).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reconciles_multitrack_session_into_per_track_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = build_multitrack_dir(tmp.path(), "sess-mt");
+        let store = ManifestStore::in_memory().unwrap();
+
+        reconcile_session(&store, &dir).unwrap();
+
+        // Две дорожки с ролями и корректной per-track цепочкой.
+        let tracks = store.get_tracks("sess-mt").unwrap();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].role, "judge");
+        assert_eq!(tracks[1].role, "defense");
+        assert_eq!(tracks[1].source_channel, 1);
+
+        let judge = store.get_track_segments("sess-mt", 0).unwrap();
+        let defense = store.get_track_segments("sess-mt", 1).unwrap();
+        assert_eq!(judge.len(), 2);
+        assert_eq!(defense.len(), 1);
+
+        for t in &tracks {
+            let segs = store.get_track_segments("sess-mt", t.track_id).unwrap();
+            let hashes: Vec<String> = segs.iter().map(|s| s.sha256.clone()).collect();
+            let links: Vec<String> = segs.iter().map(|s| s.chain_link.clone()).collect();
+            assert!(hash::verify_chain(&hashes, &links, t.final_chain_link.as_deref()));
+        }
     }
 
     #[test]

@@ -16,6 +16,8 @@ pub mod capture;
 pub mod convert;
 pub mod devices;
 pub mod ring;
+pub mod sync;
+pub mod tracks;
 
 /// Ошибки слоя захвата звука. Текстовые детали — для логов/IPC (строкой в UI).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +37,9 @@ pub enum AudioError {
     Stream(String),
     /// Ошибка файловой подсистемы при записи сегментов.
     Io(String),
+    /// Некорректная карта дорожек `audio.tracks` (роль вне справочника,
+    /// пустой состав и т.п.) — многоканал по ролям (этап 09).
+    TrackConfig(String),
 }
 
 impl fmt::Display for AudioError {
@@ -49,6 +54,7 @@ impl fmt::Display for AudioError {
             AudioError::UnsupportedFormat(e) => write!(f, "формат семплов не поддержан: {e}"),
             AudioError::Stream(e) => write!(f, "ошибка входного потока: {e}"),
             AudioError::Io(e) => write!(f, "ошибка ввода-вывода: {e}"),
+            AudioError::TrackConfig(e) => write!(f, "некорректная карта дорожек: {e}"),
         }
     }
 }

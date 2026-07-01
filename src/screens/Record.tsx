@@ -90,7 +90,9 @@ export function RecordScreen() {
   // по завершении stopCapture и иначе мгновенно сбросило бы индикатор. Флагом
   // управляет только onStop — держим его минимум заметное время.
   const [saving, setSaving] = useState(false);
-  const [level, setLevel] = useState<LevelEvent>({ channels: [] });
+  // Уровни по дорожкам: track_id → последнее событие (многоканал — этап 09).
+  // Для одноканальной записи здесь одна запись с ключом 0.
+  const [levels, setLevels] = useState<Record<number, LevelEvent>>({});
   const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   // Привязка к делу (этап 05): `resolved` из кэша или `manual` (pending).
@@ -186,7 +188,9 @@ export function RecordScreen() {
     const unlisteners: Array<() => void> = [];
     let active = true;
     const wire = async () => {
-      const a = await onAudioLevel(setLevel);
+      const a = await onAudioLevel((e) =>
+        setLevels((prev) => ({ ...prev, [e.track_id ?? 0]: e })),
+      );
       const b = await onCaptureState((e) => setState(e.state));
       const c = await onReliabilityWarning(handleWarning);
       if (active) {
@@ -289,7 +293,7 @@ export function RecordScreen() {
       setState('stopped');
       setStartedAtMs(null);
       setSessionInfo(null);
-      setLevel({ channels: [] });
+      setLevels({});
     } catch (e) {
       // Стоп забрал сессию из состояния ядра — активной записи уже нет.
       await holdAtLeast(startedAt, STOP_INDICATOR_MIN_MS);
@@ -508,7 +512,11 @@ export function RecordScreen() {
               {state === 'idle' || state === 'stopped' ? 'Мониторинг' : STATUS_LABEL[state]}
             </Tag>
           </div>
-          <LevelMeter level={level} active={state === 'recording'} />
+          <TrackMeters
+            levels={levels}
+            tracks={settings?.audio.multichannel.enabled ? settings.audio.tracks : []}
+            active={state === 'recording'}
+          />
         </div>
 
         {sessionInfo && (state === 'recording' || state === 'paused') && (
@@ -622,6 +630,55 @@ function toMeterPct(v: number): number {
   const db = 20 * Math.log10(v); // dBFS, ≤ 0
   const pct = ((db - METER_FLOOR_DBFS) / (0 - METER_FLOOR_DBFS)) * 100;
   return Math.max(0, Math.min(100, pct));
+}
+
+// ── Пофайловые метры по дорожкам (многоканал — этап 09) ──────────────────────
+// Одноканальная запись (track_id 0) рисуется одним метром без подписи роли.
+function TrackMeters({
+  levels,
+  tracks,
+  active,
+}: {
+  levels: Record<number, LevelEvent>;
+  tracks: { role: string; label: string }[];
+  active: boolean;
+}) {
+  // Дорожки для показа: если задана карта дорожек — по ней (даже до первых
+  // событий), иначе — по пришедшим событиям (v1: одна дорожка 0).
+  const ids =
+    tracks.length > 0
+      ? tracks.map((_, i) => i)
+      : Object.keys(levels)
+          .map(Number)
+          .sort((a, b) => a - b);
+  const list = ids.length > 0 ? ids : [0];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {list.map((id) => {
+        const t = tracks[id];
+        const caption = t ? t.label.trim() || t.role : null;
+        return (
+          <div key={id} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {caption && (
+              <span
+                style={{
+                  fontSize: 11,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.12em',
+                  color: 'var(--muted)',
+                  fontWeight: 500,
+                }}
+              >
+                {`Дорожка ${id + 1} · ${caption}`}
+              </span>
+            )}
+            <LevelMeter level={levels[id] ?? { channels: [] }} active={active} />
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // ── Индикатор уровня: столбик RMS/пик + клиппинг на каждый канал записи ──────

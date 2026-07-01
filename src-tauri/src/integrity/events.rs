@@ -98,6 +98,29 @@ impl RecordingEvent {
             detail: Some(detail),
         }
     }
+
+    /// Событие, отнесённое к конкретной дорожке (многоканал, этап 09): `track_id`
+    /// кладётся в `detail` (обрыв/пауза/дрейф одного канала не затрагивает
+    /// остальные). Необязательные доп. поля объединяются в тот же объект.
+    pub fn for_track(
+        kind: EventKind,
+        at_unix_ms: u64,
+        track_id: u32,
+        extra: Option<serde_json::Value>,
+    ) -> Self {
+        let mut obj = serde_json::Map::new();
+        obj.insert("track_id".to_string(), serde_json::json!(track_id));
+        if let Some(serde_json::Value::Object(m)) = extra {
+            for (k, v) in m {
+                obj.insert(k, v);
+            }
+        }
+        Self {
+            kind,
+            at_unix_ms,
+            detail: Some(serde_json::Value::Object(obj)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -140,5 +163,28 @@ mod tests {
         let ev = RecordingEvent::new(EventKind::Stopped, 42);
         let json = serde_json::to_string(&ev).unwrap();
         assert!(!json.contains("detail"));
+    }
+
+    #[test]
+    fn for_track_puts_track_id_in_detail() {
+        // Обрыв устройства на дорожке 1 — событие несёт track_id и причину,
+        // остальные дорожки не затронуты (отдельные события).
+        let ev = RecordingEvent::for_track(
+            EventKind::DeviceLost,
+            7,
+            1,
+            Some(serde_json::json!({ "device": "USB Mic 2" })),
+        );
+        let d = ev.detail.as_ref().unwrap();
+        assert_eq!(d["track_id"], serde_json::json!(1));
+        assert_eq!(d["device"], serde_json::json!("USB Mic 2"));
+    }
+
+    #[test]
+    fn for_track_without_extra_has_only_track_id() {
+        let ev = RecordingEvent::for_track(EventKind::Resumed, 9, 2, None);
+        let d = ev.detail.as_ref().unwrap();
+        assert_eq!(d["track_id"], serde_json::json!(2));
+        assert_eq!(d.as_object().unwrap().len(), 1);
     }
 }

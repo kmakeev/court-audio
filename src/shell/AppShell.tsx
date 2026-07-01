@@ -16,8 +16,8 @@ interface NavItem {
 const NAV: NavItem[] = [
   { to: '/', label: 'Запись', icon: 'icon-step-report' },
   { to: '/sessions', label: 'Сессии', icon: 'icon-step-case' },
-  { to: '/settings', label: 'Настройки', icon: 'icon-norm-rule' },
-  { to: '/diagnostics', label: 'Диагностика', icon: 'icon-ai' },
+  { to: '/settings', label: 'Настройки', icon: 'icon-settings' },
+  { to: '/diagnostics', label: 'Диагностика', icon: 'icon-activity' },
 ];
 
 const APP_TITLE = 'Аудиопротокол';

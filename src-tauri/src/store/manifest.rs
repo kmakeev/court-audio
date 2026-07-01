@@ -157,6 +157,9 @@ impl SessionRecord {
 /// Запись сегмента в манифесте.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SegmentRecord {
+    /// Дорожка сегмента (многоканал, этап 09). `0` — единственная дорожка v1.
+    #[serde(default)]
+    pub track_id: u32,
     pub index: u32,
     /// Путь к файлу сегмента на диске (открытый WAV или `.enc` при шифровании).
     pub path: String,
@@ -167,8 +170,24 @@ pub struct SegmentRecord {
     pub size_bytes: u64,
     /// SHA-256 каноничного контента (hex).
     pub sha256: String,
-    /// Звено хеш-цепочки на этом сегменте.
+    /// Звено хеш-цепочки на этом сегменте (в рамках своей дорожки).
     pub chain_link: String,
+}
+
+/// Дорожка сессии в карте «канал ↔ роль» (многоканал, этап 09). Легаси-сессии
+/// (моно) имеют одну дорожку `track_id = 0` роль `single`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrackRecord {
+    pub track_id: u32,
+    /// Роль дорожки (из `audio.roles`; для легаси — `single`).
+    pub role: String,
+    pub label: String,
+    /// Устройство-источник (`None` — системное по умолчанию).
+    pub source_device: Option<String>,
+    /// Индекс канала в интерливнутом потоке устройства.
+    pub source_channel: u16,
+    /// Финальное звено хеш-цепочки **этой дорожки** (per-track целостность).
+    pub final_chain_link: Option<String>,
 }
 
 /// Запись события в манифесте (событие + порядковый номер).
@@ -251,13 +270,14 @@ impl ManifestStore {
         Ok(())
     }
 
-    /// Добавить/обновить сегмент сессии (upsert по `(session_id, idx)`).
+    /// Добавить/обновить сегмент сессии (upsert по `(session_id, track_id, idx)`).
+    /// `track_id` берётся из самой записи (`0` — единственная дорожка v1).
     pub fn append_segment(&self, session_id: &str, seg: &SegmentRecord) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO segments (
-                session_id, idx, path, started_at_unix_ms, frames, size_bytes, sha256, chain_link
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-            ON CONFLICT(session_id, idx) DO UPDATE SET
+                session_id, track_id, idx, path, started_at_unix_ms, frames, size_bytes, sha256, chain_link
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+            ON CONFLICT(session_id, track_id, idx) DO UPDATE SET
                 path=excluded.path,
                 started_at_unix_ms=excluded.started_at_unix_ms,
                 frames=excluded.frames,
@@ -266,6 +286,7 @@ impl ManifestStore {
                 chain_link=excluded.chain_link",
             rusqlite::params![
                 session_id,
+                seg.track_id as i64,
                 seg.index as i64,
                 seg.path,
                 seg.started_at_unix_ms as i64,
@@ -276,6 +297,91 @@ impl ManifestStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// Вставить/обновить дорожку сессии (upsert по `(session_id, track_id)`).
+    pub fn insert_track(&self, session_id: &str, t: &TrackRecord) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO tracks (
+                session_id, track_id, role, label, source_device, source_channel, final_chain_link
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7)
+            ON CONFLICT(session_id, track_id) DO UPDATE SET
+                role=excluded.role,
+                label=excluded.label,
+                source_device=excluded.source_device,
+                source_channel=excluded.source_channel,
+                final_chain_link=excluded.final_chain_link",
+            rusqlite::params![
+                session_id,
+                t.track_id as i64,
+                t.role,
+                t.label,
+                t.source_device,
+                t.source_channel as i64,
+                t.final_chain_link,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Зафиксировать финальное звено хеш-цепочки дорожки (per-track целостность).
+    pub fn set_track_final_chain_link(
+        &self,
+        session_id: &str,
+        track_id: u32,
+        link: &str,
+    ) -> Result<(), StoreError> {
+        let n = self.conn.execute(
+            "UPDATE tracks SET final_chain_link = ?3 WHERE session_id = ?1 AND track_id = ?2",
+            rusqlite::params![session_id, track_id as i64, link],
+        )?;
+        if n == 0 {
+            return Err(StoreError::NotFound(format!(
+                "дорожка {track_id} сессии {session_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Дорожки сессии в порядке `track_id`.
+    pub fn get_tracks(&self, session_id: &str) -> Result<Vec<TrackRecord>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT track_id, role, label, source_device, source_channel, final_chain_link
+             FROM tracks WHERE session_id = ?1 ORDER BY track_id ASC",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok(TrackRecord {
+                track_id: row.get::<_, i64>(0)? as u32,
+                role: row.get(1)?,
+                label: row.get(2)?,
+                source_device: row.get(3)?,
+                source_channel: row.get::<_, i64>(4)? as u16,
+                final_chain_link: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Сегменты одной дорожки в порядке индекса.
+    pub fn get_track_segments(
+        &self,
+        session_id: &str,
+        track_id: u32,
+    ) -> Result<Vec<SegmentRecord>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT track_id, idx, path, started_at_unix_ms, frames, size_bytes, sha256, chain_link
+             FROM segments WHERE session_id = ?1 AND track_id = ?2 ORDER BY idx ASC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id, track_id as i64], map_segment)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// Дописать событие; возвращает присвоенный `seq` (монотонный в рамках сессии).
@@ -447,23 +553,14 @@ impl ManifestStore {
         Ok(out)
     }
 
-    /// Сегменты сессии в порядке индекса.
+    /// Все сегменты сессии по всем дорожкам, порядок `(track_id, idx)`. Для
+    /// одноканальной сессии (единственная дорожка `0`) — это порядок по `idx`.
     pub fn get_segments(&self, session_id: &str) -> Result<Vec<SegmentRecord>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT idx, path, started_at_unix_ms, frames, size_bytes, sha256, chain_link
-             FROM segments WHERE session_id = ?1 ORDER BY idx ASC",
+            "SELECT track_id, idx, path, started_at_unix_ms, frames, size_bytes, sha256, chain_link
+             FROM segments WHERE session_id = ?1 ORDER BY track_id ASC, idx ASC",
         )?;
-        let rows = stmt.query_map([session_id], |row| {
-            Ok(SegmentRecord {
-                index: row.get::<_, i64>(0)? as u32,
-                path: row.get(1)?,
-                started_at_unix_ms: row.get::<_, i64>(2)? as u64,
-                frames: row.get::<_, i64>(3)? as u64,
-                size_bytes: row.get::<_, i64>(4)? as u64,
-                sha256: row.get(5)?,
-                chain_link: row.get(6)?,
-            })
-        })?;
+        let rows = stmt.query_map([session_id], map_segment)?;
         let mut out = Vec::new();
         for r in rows {
             out.push(r?);
@@ -515,6 +612,21 @@ impl ManifestStore {
             .execute("DELETE FROM events WHERE session_id = ?1", [session_id])?;
         Ok(())
     }
+}
+
+/// Маппинг строки segments (колонки: track_id, idx, path, started_at_unix_ms,
+/// frames, size_bytes, sha256, chain_link) в [`SegmentRecord`].
+fn map_segment(row: &rusqlite::Row<'_>) -> rusqlite::Result<SegmentRecord> {
+    Ok(SegmentRecord {
+        track_id: row.get::<_, i64>(0)? as u32,
+        index: row.get::<_, i64>(1)? as u32,
+        path: row.get(2)?,
+        started_at_unix_ms: row.get::<_, i64>(3)? as u64,
+        frames: row.get::<_, i64>(4)? as u64,
+        size_bytes: row.get::<_, i64>(5)? as u64,
+        sha256: row.get(6)?,
+        chain_link: row.get(7)?,
+    })
 }
 
 /// Маппинг строки sessions в [`SessionRecord`] (внутри возвращает Result, чтобы
@@ -585,6 +697,7 @@ mod tests {
                 .append_segment(
                     "sess-1",
                     &SegmentRecord {
+                        track_id: 0,
                         index: i,
                         path: format!("seg-{i}.wav.enc"),
                         started_at_unix_ms: 1_700_000_000_000 + i as u64,
@@ -667,6 +780,7 @@ mod tests {
             .append_segment(
                 "sess-1",
                 &SegmentRecord {
+                    track_id: 0,
                     index: 1,
                     path: "seg-1.wav.enc".into(),
                     started_at_unix_ms: 1,

@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use court_audio_lib::integrity::events::{EventKind, RecordingEvent};
 use court_audio_lib::integrity::hash;
 use court_audio_lib::settings::{RetentionMode, Settings};
-use court_audio_lib::store::export::SegmentEntry;
+use court_audio_lib::store::export::TrackEntry;
 use court_audio_lib::store::manifest::{
     ManifestStore, SegmentRecord, SessionRecord, SessionStatus, UploadStatus,
 };
@@ -54,7 +54,7 @@ impl UploadTransport for FlakyTransport {
         &self,
         _token: &str,
         _recording_id: &str,
-        _segments: &[SegmentEntry],
+        _tracks: &[TrackEntry],
     ) -> Result<(), TransportError> {
         Ok(())
     }
@@ -63,6 +63,7 @@ impl UploadTransport for FlakyTransport {
         &self,
         _token: &str,
         _recording_id: &str,
+        _track_id: u32,
         part_index: u32,
         _bytes: &[u8],
     ) -> Result<(), TransportError> {
@@ -113,6 +114,7 @@ fn seed_recording(store: &ManifestStore, dir: &Path, n: u32) {
             .append_segment(
                 "sess-int",
                 &SegmentRecord {
+                    track_id: 0,
                     index: i,
                     path: name,
                     started_at_unix_ms: i as u64,

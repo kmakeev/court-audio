@@ -48,6 +48,8 @@ fn mono_capture_produces_valid_continuous_segments() {
         level_update_hz: 25,
         output_dir: tmp.path().to_path_buf(),
         scratch_len: consumer.capacity(),
+        channel_index: None,
+        track_id: 0,
     };
 
     // Останавливаем заранее: consumer сольёт буфер и завершится.
@@ -114,6 +116,8 @@ fn stereo_input_is_downmixed_to_mono() {
         level_update_hz: 25,
         output_dir: tmp.path().to_path_buf(),
         scratch_len: consumer.capacity(),
+        channel_index: None,
+        track_id: 0,
     };
 
     let stop = Arc::new(AtomicBool::new(true));
@@ -170,6 +174,8 @@ fn short_recording_journals_trailing_segment() {
         level_update_hz: 25,
         output_dir: tmp.path().to_path_buf(),
         scratch_len: consumer.capacity(),
+        channel_index: None,
+        track_id: 0,
     };
     let rel = ConsumerReliability {
         journal: Some(journal.clone()),

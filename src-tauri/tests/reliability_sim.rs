@@ -40,6 +40,8 @@ fn base_cfg(dir: std::path::PathBuf, rate: u32, scratch_len: usize) -> ConsumerC
         level_update_hz: 25,
         output_dir: dir,
         scratch_len,
+        channel_index: None,
+        track_id: 0,
     }
 }
 

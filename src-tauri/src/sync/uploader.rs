@@ -76,7 +76,8 @@ pub fn upload_session(
         &settings.integrity.segment_hash,
         settings.integrity.hash_chain,
     )?;
-    if manifest.segments.is_empty() {
+    let total_segments: usize = manifest.tracks.iter().map(|t| t.segments.len()).sum();
+    if total_segments == 0 {
         return Err(SyncError::Permanent(
             "у записи нет сегментов для выгрузки".to_string(),
         ));
@@ -100,6 +101,7 @@ pub fn upload_session(
                 sample_rate_hz: session.sample_rate_hz,
                 channels: session.channels,
                 bit_depth: session.bit_depth,
+                track_count: manifest.session.track_count,
             };
             let id = transport.register_session(token, &meta)?;
             queue::set_recording_id(store, session_id, &id)?;
@@ -107,16 +109,16 @@ pub fn upload_session(
         }
     };
 
-    // 2. Заявка состава сегментов (один раз).
+    // 2. Заявка состава: дорожки с ролями и их сегменты (один раз).
     if !queue::is_init_done(store, session_id)? {
-        transport.init_upload(token, &recording_id, &manifest.segments)?;
+        transport.init_upload(token, &recording_id, &manifest.tracks)?;
         queue::mark_init_done(store, session_id)?;
     }
 
     // 3. Отправка неотправленных частей батчами до parallel_uploads.
     let pending = queue::pending_parts(store, session_id)?;
     if !pending.is_empty() {
-        let path_by_index = segment_paths(store, session_id, &session.dir)?;
+        let path_by_part = segment_paths(store, session_id, &session.dir)?;
         let parallel = settings.sync.parallel_uploads.max(1) as usize;
         let max_part_bytes = (settings.sync.chunk_size_mb as u64).saturating_mul(BYTES_PER_MB);
 
@@ -126,22 +128,28 @@ pub fn upload_session(
                 token,
                 &recording_id,
                 batch,
-                &path_by_index,
+                &path_by_part,
                 key,
                 max_part_bytes,
             );
 
             let mut had_transient = false;
-            for (part_index, res) in results {
+            for (track_id, part_index, res) in results {
                 match res {
-                    Ok(()) => queue::mark_part_sent(store, session_id, part_index)?,
+                    Ok(()) => queue::mark_part_sent(store, session_id, track_id, part_index)?,
                     Err(SyncError::Permanent(msg)) => {
-                        queue::record_part_attempt(store, session_id, part_index, &msg)?;
+                        queue::record_part_attempt(store, session_id, track_id, part_index, &msg)?;
                         store.set_upload_status(session_id, UploadStatus::Failed)?;
                         return Err(SyncError::Permanent(msg));
                     }
                     Err(e) => {
-                        queue::record_part_attempt(store, session_id, part_index, &e.to_string())?;
+                        queue::record_part_attempt(
+                            store,
+                            session_id,
+                            track_id,
+                            part_index,
+                            &e.to_string(),
+                        )?;
                         had_transient = true;
                     }
                 }
@@ -180,10 +188,10 @@ fn upload_batch(
     token: &str,
     recording_id: &str,
     batch: &[queue::PartRow],
-    path_by_index: &HashMap<u32, PathBuf>,
+    path_by_part: &HashMap<(u32, u32), PathBuf>,
     key: Option<&[u8; 32]>,
     max_part_bytes: u64,
-) -> Vec<(u32, Result<(), SyncError>)> {
+) -> Vec<(u32, u32, Result<(), SyncError>)> {
     std::thread::scope(|scope| {
         let handles: Vec<_> = batch
             .iter()
@@ -194,11 +202,11 @@ fn upload_batch(
                         token,
                         recording_id,
                         part,
-                        path_by_index.get(&part.part_index),
+                        path_by_part.get(&(part.track_id, part.part_index)),
                         key,
                         max_part_bytes,
                     );
-                    (part.part_index, res)
+                    (part.track_id, part.part_index, res)
                 })
             })
             .collect();
@@ -231,21 +239,21 @@ fn upload_one_part(
     }
     let bytes = read_segment_plain(path, key)
         .map_err(|e| SyncError::Permanent(format!("чтение сегмента {}: {e}", part.part_index)))?;
-    transport.upload_part(token, recording_id, part.part_index, &bytes)?;
+    transport.upload_part(token, recording_id, part.track_id, part.part_index, &bytes)?;
     Ok(())
 }
 
-/// Карта индекс сегмента → абсолютный путь хранимого файла.
+/// Карта `(track_id, index сегмента)` → абсолютный путь хранимого файла.
 fn segment_paths(
     store: &ManifestStore,
     session_id: &str,
     session_dir: &str,
-) -> Result<HashMap<u32, PathBuf>, SyncError> {
+) -> Result<HashMap<(u32, u32), PathBuf>, SyncError> {
     let dir = PathBuf::from(session_dir);
     Ok(store
         .get_segments(session_id)?
         .into_iter()
-        .map(|s| (s.index, resolve_segment_path(&dir, &s.path)))
+        .map(|s| ((s.track_id, s.index), resolve_segment_path(&dir, &s.path)))
         .collect())
 }
 
@@ -309,6 +317,7 @@ mod tests {
                 .append_segment(
                     "s1",
                     &SegmentRecord {
+                        track_id: 0,
                         index: i,
                         path: name,
                         started_at_unix_ms: i as u64,

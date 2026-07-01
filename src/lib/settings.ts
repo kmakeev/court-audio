@@ -10,6 +10,14 @@ export type RetentionMode =
   | 'delete_on_confirm'
   | 'manual';
 
+/** Одна дорожка карты «канал ↔ роль» (`audio.tracks[*]`, фаза 2 — этап 09). */
+export interface TrackConfig {
+  device: string | null;
+  channel_index: number;
+  role: string;
+  label: string;
+}
+
 export interface AudioSettings {
   device: string | null;
   sample_rate_hz: number;
@@ -17,6 +25,16 @@ export interface AudioSettings {
   channels: number;
   master_codec: MasterCodec;
   archive_copy: { enabled: boolean; codec: ArchiveCodec };
+  // Многоканал по ролям (фаза 2). Аддитивно: по умолчанию выключено.
+  multichannel: { enabled: boolean };
+  tracks: TrackConfig[];
+  roles: string[];
+  sync: {
+    clock_master_track: number;
+    drift_threshold_ms: number;
+    drift_compensate: boolean;
+  };
+  master_downmix: { enabled: boolean };
 }
 
 export interface RecorderSettings {

@@ -62,6 +62,8 @@ fn killtest_recovers_unfinished_session() {
         level_update_hz: 25,
         output_dir: session.clone(),
         scratch_len: consumer.capacity(),
+        channel_index: None,
+        track_id: 0,
     };
 
     let rel = ConsumerReliability {

@@ -20,22 +20,57 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::capture::{
-    CaptureParams, CaptureSession, DiskWatch, MonitorSession, ReliabilityConfig, ReliabilityEvent,
+    CaptureParams, CaptureSession, DiskWatch, LevelEvent, MonitorSession, ReliabilityConfig,
+    ReliabilityEvent,
 };
 use crate::audio::devices::{list_input_devices, DeviceInfo};
+use crate::audio::tracks::{resolve_tracks, ResolvedTrack};
 use crate::ipc::{load_settings, resolve_storage_root};
 use crate::recorder::journal::{Journal, JournalRecord};
+use crate::recorder::multitrack::{
+    self, track_dir, track_map_from_resolved, MultiCapture, TrackStartSpec,
+};
 use crate::recorder::recovery;
 use crate::reliability::disk_monitor::DiskThresholds;
 use crate::settings::Settings;
+
+/// Активный захват: одноканальный (v1) или многоканальный (этап 09). Обе ветки
+/// управляются единообразно (пауза/резюм/стоп), разнятся лишь способом старта.
+pub enum ActiveCapture {
+    Single(CaptureSession),
+    Multi(MultiCapture),
+}
+
+impl ActiveCapture {
+    fn pause(&self) -> Result<(), crate::audio::AudioError> {
+        match self {
+            ActiveCapture::Single(s) => s.pause(),
+            ActiveCapture::Multi(m) => m.pause(),
+        }
+    }
+    fn resume(&self) -> Result<(), crate::audio::AudioError> {
+        match self {
+            ActiveCapture::Single(s) => s.resume(),
+            ActiveCapture::Multi(m) => m.resume(),
+        }
+    }
+    fn is_paused(&self) -> bool {
+        match self {
+            ActiveCapture::Single(s) => s.is_paused(),
+            ActiveCapture::Multi(m) => m.is_paused(),
+        }
+    }
+}
 
 /// Активная сессия захвата + её метаданные для восстановления статуса в UI
 /// (этап 04): без них UI после перехода между вкладками не знал бы, что запись
 /// продолжается в фоне.
 pub struct ActiveSession {
-    pub session: CaptureSession,
+    pub capture: ActiveCapture,
     pub started_at_unix_ms: u64,
     pub output_dir: PathBuf,
+    /// Подкаталоги дорожек для журнала `Stopped` на стопе (многоканал).
+    pub track_subdirs: Vec<PathBuf>,
 }
 
 /// Управляемое Tauri состояние активной сессии захвата.
@@ -57,6 +92,8 @@ pub struct CaptureStarted {
 /// Краткое описание записанного сегмента (заглушка манифеста до этапа 03).
 #[derive(Debug, Clone, Serialize)]
 pub struct SegmentSummary {
+    /// Дорожка сегмента (многоканал — этап 09; для v1 — `0`).
+    pub track_id: u32,
     pub index: u32,
     pub path: String,
     pub frames: u64,
@@ -109,11 +146,51 @@ pub fn start_capture(
     let settings = load_settings(&app)?;
     let storage_root = resolve_storage_root(&app, &settings)?;
     let output_dir = session_dir(&storage_root);
-    let params = build_params(&settings, output_dir.clone());
+    let started_at_unix_ms = now_unix_ms();
+
+    // Многоканал (этап 09): включён и задана карта дорожек → N потоков по ролям.
+    // Иначе — одноканальный путь v1 (поведение без изменений).
+    let tracks = resolve_tracks(&settings).map_err(|e| e.to_string())?;
+    let multichannel = settings.audio.multichannel.enabled && !settings.audio.tracks.is_empty();
+
+    let started = if multichannel {
+        start_multichannel(
+            &app,
+            &settings,
+            &storage_root,
+            &output_dir,
+            started_at_unix_ms,
+            &tracks,
+        )?
+    } else {
+        start_single(&app, &settings, &storage_root, &output_dir, started_at_unix_ms)?
+    };
+
+    *guard = Some(started.active);
+    drop(guard);
+
+    emit_state(&app, "recording");
+    Ok(started.reply)
+}
+
+/// Внутренний результат старта: активная сессия + ответ UI.
+struct Started {
+    active: ActiveSession,
+    reply: CaptureStarted,
+}
+
+/// Одноканальный старт (v1): один поток, downmix к `audio.channels`.
+fn start_single(
+    app: &AppHandle,
+    settings: &Settings,
+    storage_root: &std::path::Path,
+    output_dir: &std::path::Path,
+    started_at_unix_ms: u64,
+) -> Result<Started, String> {
+    let params = build_params(settings, output_dir.to_path_buf());
 
     // Журнал сессии (write-ahead): открываем до старта, сразу пишем SessionStarted.
-    let started_at_unix_ms = now_unix_ms();
-    let journal = Journal::open(&output_dir).map_err(|e| e.to_string())?;
+    let journal = Journal::open(output_dir).map_err(|e| e.to_string())?;
     let journal = Arc::new(Mutex::new(journal));
     {
         let mut g = journal.lock().map_err(|_| "журнал повреждён".to_string())?;
@@ -132,29 +209,116 @@ pub fn start_capture(
         let _ = app_for_level.emit(EVENT_AUDIO_LEVEL, level);
     });
 
-    let app_for_warn = app.clone();
-    let on_event: crate::audio::capture::ReliabilityCallback =
-        Arc::new(move |ev: ReliabilityEvent| {
-            let _ = app_for_warn.emit(EVENT_RELIABILITY_WARNING, ev);
-        });
-
-    let reliability = build_reliability(&settings, &storage_root, Arc::clone(&journal), on_event);
+    let reliability = build_reliability(
+        settings,
+        storage_root,
+        Arc::clone(&journal),
+        warn_cb(app),
+        settings.audio.device.clone(),
+    );
 
     let session =
         CaptureSession::start(params, level_cb, reliability).map_err(|e| e.to_string())?;
     let native = session.native_format();
-    *guard = Some(ActiveSession {
-        session,
-        started_at_unix_ms,
-        output_dir: output_dir.clone(),
-    });
-    drop(guard);
+    Ok(Started {
+        active: ActiveSession {
+            capture: ActiveCapture::Single(session),
+            started_at_unix_ms,
+            output_dir: output_dir.to_path_buf(),
+            track_subdirs: Vec::new(),
+        },
+        reply: CaptureStarted {
+            sample_rate_hz: native.sample_rate_hz,
+            channels: native.channels,
+            output_dir: output_dir.to_string_lossy().into_owned(),
+        },
+    })
+}
 
-    emit_state(&app, "recording");
-    Ok(CaptureStarted {
-        sample_rate_hz: native.sample_rate_hz,
-        channels: native.channels,
-        output_dir: output_dir.to_string_lossy().into_owned(),
+/// Многоканальный старт (этап 09): по одному потоку `CaptureSession` на дорожку в
+/// подкаталог `track-<id>-<role>/`; общий таймкод; карта дорожек — в `tracks.json`.
+fn start_multichannel(
+    app: &AppHandle,
+    settings: &Settings,
+    storage_root: &std::path::Path,
+    output_dir: &std::path::Path,
+    started_at_unix_ms: u64,
+    tracks: &[ResolvedTrack],
+) -> Result<Started, String> {
+    // Карта дорожек (для реконсиляции и UI) + корневой журнал сессии.
+    let map = track_map_from_resolved(tracks);
+    multitrack::write_track_map(output_dir, &map).map_err(|e| e.to_string())?;
+    {
+        let mut root = Journal::open(output_dir).map_err(|e| e.to_string())?;
+        root.append(&JournalRecord::SessionStarted {
+            started_at_unix_ms,
+            sample_rate_hz: settings.audio.sample_rate_hz,
+            channels: tracks.len() as u16,
+            bit_depth: settings.audio.bit_depth,
+            segment_seconds: settings.recorder.segment_seconds,
+        })
+        .map_err(|e| e.to_string())?;
+    }
+
+    let mut specs = Vec::with_capacity(map.tracks.len());
+    let mut subdirs = Vec::with_capacity(map.tracks.len());
+    for entry in &map.tracks {
+        let subdir = track_dir(output_dir, entry);
+        subdirs.push(subdir.clone());
+        // Per-track журнал (write-ahead) в подкаталоге дорожки.
+        let mut tj = Journal::open(&subdir).map_err(|e| e.to_string())?;
+        tj.append(&JournalRecord::SessionStarted {
+            started_at_unix_ms,
+            sample_rate_hz: settings.audio.sample_rate_hz,
+            channels: 1,
+            bit_depth: settings.audio.bit_depth,
+            segment_seconds: settings.recorder.segment_seconds,
+        })
+        .map_err(|e| e.to_string())?;
+        let tj = Arc::new(Mutex::new(tj));
+
+        let mut params = build_params(settings, subdir.clone());
+        params.device = entry.device.clone();
+        params.channel_index = Some(entry.channel_index);
+        params.track_id = entry.track_id;
+        params.target_channels = 1; // дорожка моно
+
+        let reliability = build_reliability(settings, storage_root, tj, warn_cb(app), entry.device.clone());
+        specs.push(TrackStartSpec {
+            track_id: entry.track_id,
+            params,
+            reliability,
+        });
+    }
+
+    let app_for_level = app.clone();
+    let level_emit: crate::recorder::multitrack::LevelEmit =
+        Arc::new(move |level: LevelEvent| {
+            let _ = app_for_level.emit(EVENT_AUDIO_LEVEL, level);
+        });
+
+    let multi = MultiCapture::start(specs, level_emit).map_err(|e| e.to_string())?;
+    let track_count = multi.track_count() as u16;
+    Ok(Started {
+        active: ActiveSession {
+            capture: ActiveCapture::Multi(multi),
+            started_at_unix_ms,
+            output_dir: output_dir.to_path_buf(),
+            track_subdirs: subdirs,
+        },
+        reply: CaptureStarted {
+            sample_rate_hz: settings.audio.sample_rate_hz,
+            channels: track_count,
+            output_dir: output_dir.to_string_lossy().into_owned(),
+        },
+    })
+}
+
+/// Колбэк событий надёжности: эмитит `reliability_warning` в UI.
+fn warn_cb(app: &AppHandle) -> crate::audio::capture::ReliabilityCallback {
+    let app_for_warn = app.clone();
+    Arc::new(move |ev: ReliabilityEvent| {
+        let _ = app_for_warn.emit(EVENT_RELIABILITY_WARNING, ev);
     })
 }
 
@@ -175,26 +339,49 @@ pub fn stop_capture(
     };
 
     emit_state(&app, "stopping");
-    let segments = active.session.stop().map_err(|e| e.to_string())?;
-    // Фиксируем штатное завершение в журнале (write-ahead): без этой записи
-    // реконсиляция считает сессию незавершённой и оставляет статус «recording».
-    // Потоки записи уже остановлены (session.stop их join'ит), журнал свободен.
+    // Собираем сегменты обеих веток в единый список (с track_id).
+    let mut summaries: Vec<SegmentSummary> = Vec::new();
+    match active.capture {
+        ActiveCapture::Single(session) => {
+            for s in session.stop().map_err(|e| e.to_string())? {
+                summaries.push(segment_summary(0, s));
+            }
+        }
+        ActiveCapture::Multi(multi) => {
+            for (track_id, segs) in multi.stop().map_err(|e| e.to_string())? {
+                for s in segs {
+                    summaries.push(segment_summary(track_id, s));
+                }
+            }
+            // Штатное завершение per-track журналов (для реконсиляции статуса).
+            for subdir in &active.track_subdirs {
+                if let Ok(mut j) = Journal::open(subdir) {
+                    let _ = j.append(&JournalRecord::Stopped);
+                }
+            }
+        }
+    }
+    // Фиксируем штатное завершение в корневом журнале (write-ahead): без этой
+    // записи реконсиляция считает сессию незавершённой (статус «recording»).
     {
         let mut j = Journal::open(&active.output_dir).map_err(|e| e.to_string())?;
         j.append(&JournalRecord::Stopped)
             .map_err(|e| e.to_string())?;
     }
     emit_state(&app, "stopped");
-    Ok(segments
-        .into_iter()
-        .map(|s| SegmentSummary {
-            index: s.index,
-            path: s.path.to_string_lossy().into_owned(),
-            frames: s.frames,
-            // u128 не сериализуется serde_json как число — отдаём строкой.
-            started_at_unix_ms: s.started_at_unix_ms.to_string(),
-        })
-        .collect())
+    Ok(summaries)
+}
+
+/// Свести `SegmentInfo` в UI-сводку с дорожкой.
+fn segment_summary(track_id: u32, s: crate::recorder::segment_writer::SegmentInfo) -> SegmentSummary {
+    SegmentSummary {
+        track_id,
+        index: s.index,
+        path: s.path.to_string_lossy().into_owned(),
+        frames: s.frames,
+        // u128 не сериализуется serde_json как число — отдаём строкой.
+        started_at_unix_ms: s.started_at_unix_ms.to_string(),
+    }
 }
 
 /// Поставить активный захват на паузу.
@@ -208,7 +395,7 @@ pub fn pause_capture(app: AppHandle, state: State<'_, CaptureState>) -> Result<(
         let active = guard
             .as_ref()
             .ok_or_else(|| "запись не запущена".to_string())?;
-        active.session.pause().map_err(|e| e.to_string())?;
+        active.capture.pause().map_err(|e| e.to_string())?;
     }
     emit_state(&app, "paused");
     Ok(())
@@ -225,7 +412,7 @@ pub fn resume_capture(app: AppHandle, state: State<'_, CaptureState>) -> Result<
         let active = guard
             .as_ref()
             .ok_or_else(|| "запись не запущена".to_string())?;
-        active.session.resume().map_err(|e| e.to_string())?;
+        active.capture.resume().map_err(|e| e.to_string())?;
     }
     emit_state(&app, "recording");
     Ok(())
@@ -322,7 +509,7 @@ pub fn capture_status(state: State<'_, CaptureState>) -> Result<CaptureStatus, S
             segment_count: 0,
         }),
         Some(active) => Ok(CaptureStatus {
-            state: if active.session.is_paused() {
+            state: if active.capture.is_paused() {
                 "paused"
             } else {
                 "recording"
@@ -335,18 +522,31 @@ pub fn capture_status(state: State<'_, CaptureState>) -> Result<CaptureStatus, S
 }
 
 /// Подсчитать записанные WAV-сегменты в каталоге сессии (`seg-NNNN-….wav`).
+/// Многоканал (этап 09): сегменты живут в подкаталогах дорожек — считаем и их
+/// (один уровень вложенности `track-*/`).
 fn count_segments(dir: &std::path::Path) -> u32 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .filter(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|n| n.starts_with("seg-") && n.ends_with(".wav"))
-        })
-        .count() as u32
+    fn count_flat(dir: &std::path::Path) -> u32 {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with("seg-") && n.ends_with(".wav"))
+            })
+            .count() as u32
+    }
+    let mut total = count_flat(dir);
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            if e.path().is_dir() {
+                total += count_flat(&e.path());
+            }
+        }
+    }
+    total
 }
 
 /// Найти незавершённые сессии (для UI восстановления при старте приложения).
@@ -407,6 +607,9 @@ fn build_params(settings: &Settings, output_dir: PathBuf) -> CaptureParams {
         segment_seconds: settings.recorder.segment_seconds,
         flush_interval_ms: settings.recorder.flush_interval_ms,
         output_dir,
+        // Одноканальный путь IPC: downmix к target_channels, дорожка 0.
+        channel_index: None,
+        track_id: 0,
     }
 }
 
@@ -416,6 +619,7 @@ fn build_reliability(
     storage_root: &std::path::Path,
     journal: Arc<Mutex<Journal>>,
     on_event: crate::audio::capture::ReliabilityCallback,
+    device_name: Option<String>,
 ) -> ReliabilityConfig {
     let r = &settings.reliability;
     let mirror_dir = if r.mirror.enabled {
@@ -441,7 +645,7 @@ fn build_reliability(
             r.watchdog_timeout_ms as u64,
         )),
         auto_resume: r.device_reconnect.auto_resume,
-        device_name: settings.audio.device.clone(),
+        device_name,
         on_event: Some(on_event),
     }
 }

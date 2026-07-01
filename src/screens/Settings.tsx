@@ -1,10 +1,12 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { BlockHead, Button, Card, Checkbox, Field, Select, Tag } from '../design';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { BlockHead, Button, Card, Checkbox, Field, Icon, InfoTip, Select, Tag } from '../design';
+import { listAudioDevices, type DeviceInfo } from '../lib/core';
 import {
   getSettings,
   saveSettings,
   type RetentionMode,
   type Settings,
+  type TrackConfig,
 } from '../lib/settings';
 
 // Экран «Настройки» (этап 04). Полное покрытие реестра docs/configuration.md.
@@ -28,6 +30,8 @@ const RETENTION_LABELS: Record<RetentionMode, string> = {
 export function SettingsScreen() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'loading' });
+  // Список устройств ввода — для выбора источника дорожек (многоканал).
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
 
   useEffect(() => {
     getSettings()
@@ -36,6 +40,10 @@ export function SettingsScreen() {
         setStatus({ kind: 'ready' });
       })
       .catch((e: unknown) => setStatus({ kind: 'error', message: describeError(e) }));
+    // Устройства подгружаем best-effort: их отсутствие не ломает форму.
+    listAudioDevices()
+      .then(setDevices)
+      .catch(() => setDevices([]));
   }, []);
 
   function update(mut: (draft: Settings) => void) {
@@ -127,6 +135,13 @@ export function SettingsScreen() {
               </Labeled>
             </Grid>
           </Card>
+
+          <MultichannelCard
+            settings={settings}
+            errors={errors}
+            devices={devices}
+            update={update}
+          />
 
           {/* ─────────────── СЕКЦИЯ АДМИНИСТРАТОРА ─────────────── */}
           <SectionTitle>
@@ -500,6 +515,15 @@ function validate(s: Settings): Record<string, string> {
   if (s.reliability.mirror.enabled && !s.reliability.mirror.path) {
     e['mirror_path'] = 'Укажите путь для дублирующей дорожки';
   }
+  if (s.audio.multichannel.enabled) {
+    if (s.audio.tracks.length === 0) {
+      e['tracks'] = 'Добавьте хотя бы одну дорожку или выключите многоканал';
+    } else if (s.audio.tracks.some((t) => !s.audio.roles.includes(t.role))) {
+      e['tracks'] = 'У каждой дорожки должна быть роль из справочника';
+    } else if (s.audio.sync.clock_master_track >= s.audio.tracks.length) {
+      e['tracks'] = 'Дорожка-мастер клока вне диапазона дорожек';
+    }
+  }
   return e;
 }
 
@@ -507,6 +531,293 @@ function describeError(e: unknown): string {
   if (typeof e === 'string') return e;
   if (e instanceof Error) return e.message;
   return 'неизвестная ошибка';
+}
+
+// ── Многоканальная запись по ролям (этап 09) ─────────────────────────────────
+
+/**
+ * Секция «Многоканальная запись»: тумблер режима, справочник ролей и карта
+ * дорожек «устройство/канал → роль». Аддитивно: по умолчанию выключено (v1 —
+ * один канал). Роли уходят в ex_system как вход диаризации W2.11.
+ */
+function MultichannelCard({
+  settings,
+  errors,
+  devices,
+  update,
+}: {
+  settings: Settings;
+  errors: Record<string, string>;
+  devices: DeviceInfo[];
+  update: (mut: (draft: Settings) => void) => void;
+}) {
+  const audio = settings.audio;
+  const enabled = audio.multichannel.enabled;
+
+  function addTrack() {
+    update((d) => {
+      const role = d.audio.roles[0] ?? '';
+      d.audio.tracks.push({ device: null, channel_index: d.audio.tracks.length, role, label: '' });
+    });
+  }
+  function removeTrack(i: number) {
+    update((d) => { d.audio.tracks.splice(i, 1); });
+  }
+  function patchTrack(i: number, patch: Partial<TrackConfig>) {
+    update((d) => { d.audio.tracks[i] = { ...d.audio.tracks[i], ...patch }; });
+  }
+
+  return (
+    <Card>
+      <BlockHead
+        numeral="A2"
+        title="Многоканальная запись по ролям"
+        hint="Фаза 2: N синхронных дорожек, привязанных к ролям (судья, защита, …)"
+      />
+      <Grid>
+        <Labeled label="Режим">
+          <Checkbox
+            checked={enabled}
+            onChange={(e) => update((d) => { d.audio.multichannel.enabled = e.target.checked; })}
+          >
+            Включить многоканальный захват
+          </Checkbox>
+        </Labeled>
+        <Labeled label="Сведённый мастер">
+          <Checkbox
+            checked={audio.master_downmix.enabled}
+            disabled={!enabled}
+            onChange={(e) => update((d) => { d.audio.master_downmix.enabled = e.target.checked; })}
+          >
+            Микс всех дорожек в один файл
+          </Checkbox>
+        </Labeled>
+      </Grid>
+
+      {enabled && (
+        <>
+          <Grid>
+            <Field
+              label="Справочник ролей (через запятую)"
+              placeholder="judge, clerk, prosecution, defense, witness, room"
+              value={audio.roles.join(', ')}
+              onChange={(e) =>
+                update((d) => {
+                  d.audio.roles = e.target.value
+                    .split(',')
+                    .map((r) => r.trim())
+                    .filter((r) => r.length > 0);
+                })
+              }
+            />
+            <LabeledWithTip
+              label="Опорная дорожка синхронизации"
+              tip="Эталон времени: по частоте дискретизации этой дорожки выравниваются остальные при раздельных устройствах (компенсация дрейфа). На одном многоканальном интерфейсе с общим клоком дрейфа почти нет — параметр не срабатывает."
+            >
+              <Select
+                ariaLabel="Опорная дорожка синхронизации"
+                value={String(audio.sync.clock_master_track)}
+                onChange={(v) => update((d) => { d.audio.sync.clock_master_track = Number(v); })}
+                triggerStyle={selectTriggerStyle}
+                options={
+                  audio.tracks.length > 0
+                    ? audio.tracks.map((t, i) => ({
+                        value: String(i),
+                        label: `Дорожка ${i + 1} · ${t.label.trim() || t.role}`,
+                      }))
+                    : [{ value: '0', label: '— сначала добавьте дорожки —' }]
+                }
+              />
+            </LabeledWithTip>
+            <NumField
+              label="Порог дрейфа, мс"
+              value={audio.sync.drift_threshold_ms}
+              onChange={(v) => update((d) => { d.audio.sync.drift_threshold_ms = v; })}
+            />
+            <Labeled label="Компенсация дрейфа">
+              <Checkbox
+                checked={audio.sync.drift_compensate}
+                onChange={(e) => update((d) => { d.audio.sync.drift_compensate = e.target.checked; })}
+              >
+                Выравнивать раздельные устройства
+              </Checkbox>
+            </Labeled>
+          </Grid>
+
+          <div style={{ marginTop: 16 }}>
+            <TracksEditor
+              tracks={audio.tracks}
+              roles={audio.roles}
+              devices={devices}
+              error={errors['tracks']}
+              onAdd={addTrack}
+              onRemove={removeTrack}
+              onPatch={patchTrack}
+            />
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+// Нейтральная кнопка на светлой карточке: `secondary` рассчитан на тёмную панель
+// (светлый текст), поэтому переопределяем цвет/рамку под бумагу — тот же приём,
+// что для кнопок паузы/резюма на экране «Запись».
+const NEUTRAL_BTN: CSSProperties = { color: 'var(--ink)', borderColor: 'var(--ink-soft)' };
+
+// Единая высота контролов строки дорожки: и `Field`, и кастомный `Select`
+// приводятся к 44px, иначе высота «пляшет» от поля к полю.
+const CONTROL_HEIGHT = 44;
+const selectTriggerStyle: CSSProperties = {
+  minHeight: CONTROL_HEIGHT,
+  padding: '11px 36px 11px 12px',
+};
+
+/** Таблица дорожек «устройство/канал → роль» с добавлением/удалением. */
+function TracksEditor({
+  tracks,
+  roles,
+  devices,
+  error,
+  onAdd,
+  onRemove,
+  onPatch,
+}: {
+  tracks: TrackConfig[];
+  roles: string[];
+  devices: DeviceInfo[];
+  error?: string;
+  onAdd: () => void;
+  onRemove: (i: number) => void;
+  onPatch: (i: number, patch: Partial<TrackConfig>) => void;
+}) {
+  // Опции устройства: «системное по умолчанию» (null) + перечисленные устройства.
+  const deviceOptions = [
+    { value: '', label: 'Системное по умолчанию' },
+    ...devices.map((d) => ({
+      value: d.name,
+      label: d.is_default ? `${d.name} · по умолчанию` : d.name,
+    })),
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <span
+        style={{
+          fontSize: 11,
+          textTransform: 'uppercase',
+          letterSpacing: '0.14em',
+          color: 'var(--muted)',
+          fontWeight: 500,
+        }}
+      >
+        Дорожки · карта «устройство/канал → роль»
+      </span>
+
+      {tracks.length === 0 && (
+        <Tag tone="accent">Добавьте хотя бы одну дорожку</Tag>
+      )}
+
+      {tracks.map((t, i) => (
+        <div
+          key={i}
+          style={{
+            display: 'grid',
+            // `minmax(0, …fr)`: колонка не раздвигается под содержимое (длинное
+            // имя устройства усекается в Select), ширины полей стабильны.
+            gridTemplateColumns:
+              'minmax(0, 1.6fr) minmax(0, 0.7fr) minmax(0, 1fr) minmax(0, 1.3fr) auto',
+            gap: 12,
+            alignItems: 'end',
+          }}
+        >
+          <Labeled label="Устройство">
+            <Select
+              ariaLabel={`Устройство дорожки ${i + 1}`}
+              value={t.device ?? ''}
+              onChange={(v) => onPatch(i, { device: v === '' ? null : v })}
+              options={deviceOptions}
+              triggerStyle={selectTriggerStyle}
+            />
+          </Labeled>
+          <Field
+            label="Канал"
+            type="number"
+            min={0}
+            value={String(t.channel_index)}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (!Number.isNaN(n)) onPatch(i, { channel_index: n });
+            }}
+          />
+          <Labeled label="Роль">
+            <Select
+              ariaLabel={`Роль дорожки ${i + 1}`}
+              value={t.role}
+              onChange={(v) => onPatch(i, { role: v })}
+              options={roles.map((r) => ({ value: r, label: r }))}
+              triggerStyle={selectTriggerStyle}
+            />
+          </Labeled>
+          <Field
+            label="Метка"
+            placeholder="Свидетель у трибуны"
+            value={t.label}
+            onChange={(e) => onPatch(i, { label: e.target.value })}
+          />
+          <RemoveTrackButton index={i} onClick={() => onRemove(i)} />
+        </div>
+      ))}
+
+      {error && <Tag tone="accent">{error}</Tag>}
+
+      <div>
+        <Button
+          variant="secondary"
+          style={NEUTRAL_BTN}
+          leftIcon={<Icon name="icon-add" size={14} decorative />}
+          onClick={onAdd}
+        >
+          Добавить дорожку
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Кнопка удаления дорожки — типовая иконка-крест в акцентном цвете дизайна, без
+ * рамки/коробки. Выровнена по высоте контролов строки; текст — в
+ * `aria-label`/`title`.
+ */
+function RemoveTrackButton({ index, onClick }: { index: number; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      aria-label={`Удалить дорожку ${index + 1}`}
+      title="Удалить дорожку"
+      style={{
+        height: CONTROL_HEIGHT,
+        width: 32,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        color: hover ? 'var(--accent-deep)' : 'var(--accent)',
+        cursor: 'pointer',
+        transition: 'color 120ms ease',
+      }}
+    >
+      <Icon name="icon-close" size={16} decorative />
+    </button>
+  );
 }
 
 // ── Раскладка/обёртки ────────────────────────────────────────────────────────
@@ -543,19 +854,40 @@ function Grid({ children }: { children: ReactNode }) {
   );
 }
 
+const labeledCaptionStyle: CSSProperties = {
+  fontSize: 11,
+  textTransform: 'uppercase',
+  letterSpacing: '0.14em',
+  color: 'var(--muted)',
+  fontWeight: 500,
+};
+
 function Labeled({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <span
-        style={{
-          fontSize: 11,
-          textTransform: 'uppercase',
-          letterSpacing: '0.14em',
-          color: 'var(--muted)',
-          fontWeight: 500,
-        }}
-      >
-        {label}
+      <span style={labeledCaptionStyle}>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+/** Как `Labeled`, но со стандартной иконкой-пояснением «ⓘ» рядом с подписью.
+ * `InfoTip` — вне стилизованной подписи, иначе всплывающий текст унаследовал бы
+ * `text-transform`/`letter-spacing` и выводился бы капсом. */
+function LabeledWithTip({
+  label,
+  tip,
+  children,
+}: {
+  label: string;
+  tip: string;
+  children: ReactNode;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span style={labeledCaptionStyle}>{label}</span>
+        <InfoTip text={tip} label="Что это?" />
       </span>
       {children}
     </div>
