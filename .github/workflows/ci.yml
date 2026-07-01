@@ -99,7 +99,10 @@ jobs:
 
       - name: Сборка Tauri-приложения (Windows, fallback без оффлайн-рантайма)
         if: matrix.os == 'windows-latest' && env.WEBVIEW2_OFFLINE != '1'
-        run: npm run tauri build -- --config "{\"bundle\":{\"windows\":{\"webviewInstallMode\":{\"type\":\"downloadBootstrapper\"}}}}"
+        # shell: bash — на Windows-раннере дефолт pwsh, где экранирование JSON иное;
+        # bash + одинарные кавычки передают --config без искажений.
+        shell: bash
+        run: npm run tauri build -- --config '{"bundle":{"windows":{"webviewInstallMode":{"type":"downloadBootstrapper"}}}}'
 
       - name: Артефакты сборки (Linux — deb/rpm/appimage)
         if: matrix.os == 'ubuntu-latest'
