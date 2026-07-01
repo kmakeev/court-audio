@@ -1,0 +1,57 @@
+# Статус проекта «Аудиопротокол»
+
+Снимок состояния на **2026-07-01**. Обновлять при смене этапа/крупной вехи.
+
+## v1 (этапы 00–08) — завершён
+
+Ядро захвата, надёжность/бесперебойность, хранилище + целостность, UI,
+привязка к делу, выгрузка в `ex_system`, упаковка и дистрибутивы — реализованы.
+Журнал изменений — [`../CHANGELOG.md`](../CHANGELOG.md).
+
+## CI — зелёный
+
+[`../.github/workflows/ci.yml`](../.github/workflows/ci.yml): матрица
+**macOS + Ubuntu + Windows**, шаги `fmt` → `clippy` → `check` → фронт →
+`tauri build` → артефакты прогона. Ветка сборки — `main`.
+
+По ходу первого запуска устранены 4 инфраструктурных дефекта CI (не логика
+приложения):
+1. формат `case_cmds.rs` под rustfmt;
+2. `shell: bash` для Windows `--config` (дефолт раннера — pwsh);
+3. `libasound2-dev` — ALSA-заголовки для `cpal` на Linux;
+4. `"path": null` в Windows-fallback (`--config` мержится по RFC 7386, иначе
+   остаётся `path` от `fixedRuntime` и ломает схему).
+
+## Релизы — draft по тегу
+
+[`../.github/workflows/release.yml`](../.github/workflows/release.yml): пуш тега
+`vX.Y.Z` собирает матрицу и публикует **черновик** GitHub Release с
+установщиками (публикацию подтверждает человек). Детали и оговорки —
+[`packaging.md`](packaging.md) → «Релизы».
+
+**Выпущен `v0.1.0` (черновик).** Ассеты (5): `.deb`, `.rpm`, `.AppImage`,
+`.exe` (NSIS), `.dmg` (aarch64, dev). Черновик до публикации имеет временный
+URL `releases/tag/untagged-…` и не виден на странице тега `v0.1.0`; после
+**Publish** привяжется к тегу.
+
+> Артефакты сейчас **тестовые**: неподписанные; Windows — онлайн-вариант
+> (`downloadBootstrapper`), т.к. секреты не заданы. Пользователь скачивает
+> черновик для изучения; вопрос боевого качества — далее.
+
+## Открытые пункты до боевой поставки
+
+- **Секреты** (Repository secrets) и подключение к release-джобе:
+  `WEBVIEW2_FIXED_URL` (оффлайн-Windows), Windows code signing, `GPG_*` (Linux).
+- **Отечественные ОС**: сборка `.deb`/`.rpm` на стенде Astra SE / РЕД ОС
+  ([`package-domestic.yml`](../.github/workflows/package-domestic.yml)).
+- **Опционально**: `msi`-таргет; ASCII `mainBinaryName` (сейчас имена ассетов
+  на GitHub теряют кириллицу — косметика).
+- **Финальные** bundle identifier / правообладатель (плейсхолдер
+  `ru.court.audioprotocol`) — от заказчика; чек-лист
+  [`registry-checklist.md`](registry-checklist.md).
+- **Руководство оператора/администратора** — к подаче в Реестр.
+
+## Фаза 2 — промты готовы, реализация не начата
+
+ТЗ этапов в [`../promts/`](../promts/): `09_multichannel` · `10_markers_realtime`
+· `11_gost_signing` · `12_video`. Дорожная карта — [`../CLAUDE.md`](../CLAUDE.md).
