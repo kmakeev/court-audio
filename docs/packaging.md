@@ -275,7 +275,28 @@ npm run tauri build -- --bundles dmg
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) собирает под матрицу и
 прикладывает артефакты: Linux (`deb`/`rpm`/`appimage`), Windows (`nsis`/`msi`),
-macOS (`dmg`, dev). Для `.rpm` на ubuntu-раннере ставится пакет `rpm`.
+macOS (`dmg`, dev). Для `.rpm` на ubuntu-раннере ставится пакет `rpm`. Артефакты
+прогона — временные (страница run → *Artifacts* или `gh run download <id>`), не
+Release.
+
+### Релизы (GitHub Release по тегу)
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) на пуш тега
+`vX.Y.Z` собирает матрицу и публикует **черновик релиза** (draft) с
+установщиками; публикацию подтверждает человек вручную.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0     # → сборка → draft Release с артефактами
+```
+
+`GITHUB_TOKEN` выдаётся Actions автоматически — доп. секреты для самого релиза не
+нужны. Секреты (Repository secrets) требуются только для боевого качества:
+`WEBVIEW2_FIXED_URL` (оффлайн-Windows), Windows code signing, `GPG_*` (Linux) —
+без них draft собирается неподписанным, а Windows — в онлайн-варианте
+(`downloadBootstrapper`). Как только секрет `WEBVIEW2_FIXED_URL` задан, тот же
+workflow собирает оффлайн-Windows без правок. Отечественные `.deb`/`.rpm` —
+стенд ([`package-domestic.yml`](../.github/workflows/package-domestic.yml)).
 
 ### Отечественные ОС (Astra SE / РЕД ОС)
 
