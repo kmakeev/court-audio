@@ -16,9 +16,15 @@ dist-ssr/
 # Сборки и дистрибутивы
 /src-tauri/gen/
 *.deb
+*.rpm
 *.AppImage
 *.msi
 *.exe
+
+# Оффлайн-рантайм WebView2 (фикс-версия кладётся локально/в CI-секрет, не в git;
+# см. src-tauri/webview2/README.md). README каталога — под контролем версий.
+/src-tauri/webview2/*
+!/src-tauri/webview2/README.md
 
 # Локальные записи и манифесты (НИКОГДА не коммитить — ПДн)
 /recordings/

@@ -25,13 +25,61 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb", "rpm", "appimage", "nsis", "dmg"],
+    "publisher": "Аудиопротокол",
+    "copyright": "© 2026 Аудиопротокол. Правообладатель уточняется (этап 08).",
+    "category": "Utility",
+    "shortDescription": "Аудиопротоколирование судебных заседаний",
+    "longDescription": "Надёжная запись звука в зале суда с привязкой к делу и выгрузкой в экспертную систему. Только аудио (v1).",
+    "homepage": "https://court.local/audioprotocol",
+    "licenseFile": "../LICENSE",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1",
+          "librsvg2-2",
+          "libasound2",
+          "libssl3"
+        ]
+      },
+      "rpm": {
+        "release": "1",
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3",
+          "libayatana-appindicator-gtk3",
+          "librsvg2",
+          "alsa-lib",
+          "openssl-libs"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "fixedRuntime",
+        "path": "webview2/"
+      },
+      "digestAlgorithm": "sha256",
+      "nsis": {
+        "languages": ["Russian"],
+        "installMode": "both",
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

@@ -29,7 +29,10 @@ jobs:
             librsvg2-dev \
             libayatana-appindicator3-dev \
             libssl-dev \
-            patchelf
+            patchelf \
+            rpm
+          # rpm/rpmbuild — чтобы Tauri собрал .rpm-таргет для РЕД ОС на ubuntu-раннере
+          # (сам пакет ставится в РЕД ОС; проверка установки — этап 08, docs/packaging.md).
 
       - name: Rust (stable + fmt + clippy)
         uses: dtolnay/rust-toolchain@stable
@@ -65,15 +68,65 @@ jobs:
       - name: Сборка фронтенда (tsc + vite)
         run: npm run build
 
-      - name: Сборка Tauri-приложения
+      # Оффлайн-рантайм WebView2 (fixed version) для установки в закрытом контуре.
+      # tauri.conf.json объявляет webviewInstallMode=fixedRuntime → без рантайма в
+      # src-tauri/webview2/ Windows-сборка не пройдёт. Если секрет с рантаймом задан —
+      # кладём его (получаем настоящий оффлайн-инсталлятор); иначе CI собирает обычный
+      # установщик (downloadBootstrapper), а оффлайн-артефакт выпускается на релизном
+      # стенде/с секретом. См. docs/packaging.md и src-tauri/webview2/README.md.
+      - name: Оффлайн-рантайм WebView2 (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          WEBVIEW2_FIXED_URL: ${{ secrets.WEBVIEW2_FIXED_URL }}
+        run: |
+          if ($env:WEBVIEW2_FIXED_URL) {
+            Invoke-WebRequest -Uri $env:WEBVIEW2_FIXED_URL -OutFile webview2.cab
+            New-Item -ItemType Directory -Force -Path src-tauri/webview2 | Out-Null
+            expand webview2.cab -F:* src-tauri/webview2 | Out-Null
+            "WEBVIEW2_OFFLINE=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            Write-Host "WEBVIEW2_FIXED_URL не задан — CI соберёт обычный установщик (downloadBootstrapper)."
+          }
+
+      - name: Сборка Tauri-приложения (Linux/macOS)
+        if: matrix.os != 'windows-latest'
         run: npm run tauri build
 
-      - name: Артефакты сборки (Linux)
+      - name: Сборка Tauri-приложения (Windows, оффлайн-рантайм в бандле)
+        if: matrix.os == 'windows-latest' && env.WEBVIEW2_OFFLINE == '1'
+        run: npm run tauri build
+
+      - name: Сборка Tauri-приложения (Windows, fallback без оффлайн-рантайма)
+        if: matrix.os == 'windows-latest' && env.WEBVIEW2_OFFLINE != '1'
+        run: npm run tauri build -- --config "{\"bundle\":{\"windows\":{\"webviewInstallMode\":{\"type\":\"downloadBootstrapper\"}}}}"
+
+      - name: Артефакты сборки (Linux — deb/rpm/appimage)
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: audioprotocol-linux
           path: |
             src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
             src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: warn
+
+      - name: Артефакты сборки (Windows — nsis/msi)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audioprotocol-windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
+
+      - name: Артефакты сборки (macOS — dmg, dev)
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: audioprotocol-macos
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: warn

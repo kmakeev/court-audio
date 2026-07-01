@@ -1,0 +1,76 @@
+name: Package (Astra SE / РЕД ОС)
+
+# Сборка дистрибутивов под ОТЕЧЕСТВЕННЫЕ ОС (этап 08_packaging).
+#
+# GitHub-hosted раннеров под Astra Linux SE / РЕД ОС нет, поэтому джоба
+# запускается ВРУЧНУЮ (workflow_dispatch) на СОВМЕСТИМОМ билдере:
+#   - self-hosted раннер, поднятый в Astra SE или РЕД ОС, ИЛИ
+#   - контейнер с образом соответствующей ОС на self-hosted раннере.
+# Пошаговая процедура и требования к стенду — docs/packaging.md.
+#
+# Пока такой билдер не подключён, этот workflow служит документированным
+# каркасом: выбор целевой ОС + артефакт .deb (Astra) / .rpm (РЕД ОС).
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_os:
+        description: "Целевая ОС билдера"
+        required: true
+        type: choice
+        options:
+          - astra-se
+          - red-os
+
+jobs:
+  package:
+    # Требуется self-hosted раннер с меткой соответствующей ОС.
+    # Метки настраиваются при регистрации раннера на стенде суда/поставщика.
+    runs-on: [self-hosted, "${{ inputs.target_os }}"]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Системные зависимости ставятся из ЛОКАЛЬНОГО репозитория ОС
+      # (закрытый контур). Точные имена пакетов — docs/packaging.md.
+      - name: Проверка системных зависимостей (webkit + аудио + сборка)
+        run: |
+          echo "Astra SE (.deb): libwebkit2gtk-4.1-0, libgtk-3-0, libasound2, libssl3, patchelf"
+          echo "РЕД ОС (.rpm):   webkit2gtk4.1, gtk3, alsa-lib, openssl-libs, rpm-build"
+          echo "Установить из локального репозитория ОС перед сборкой (см. docs/packaging.md)."
+
+      - name: Rust toolchain (offline/зеркало)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Установка npm-зависимостей
+        run: npm ci
+
+      - name: Сборка фронтенда
+        run: npm run build
+
+      # deb-таргет для Astra, rpm-таргет для РЕД ОС. Оба объявлены в
+      # tauri.conf.json (bundle.linux.deb.depends / bundle.linux.rpm.depends).
+      - name: Сборка дистрибутива (deb — Astra)
+        if: inputs.target_os == 'astra-se'
+        run: npm run tauri build -- --bundles deb
+
+      - name: Сборка дистрибутива (rpm — РЕД ОС)
+        if: inputs.target_os == 'red-os'
+        run: npm run tauri build -- --bundles rpm
+
+      # GPG-подпись пакета/репозитория — ключ из секрета контура (не в git).
+      # Процедура подписи и раздачи локального репозитория — docs/packaging.md.
+      - name: Артефакт дистрибутива
+        uses: actions/upload-artifact@v4
+        with:
+          name: audioprotocol-${{ inputs.target_os }}
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: warn

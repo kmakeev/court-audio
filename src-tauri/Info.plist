@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Дополнения к сгенерированному Info.plist для macOS-бандла (Tauri мержит этот
+  файл при сборке). NSMicrophoneUsageDescription обязателен: без него macOS не
+  показывает запрос доступа к микрофону (TCC), и захват возвращает тишину.
+  macOS — dev-таргет (см. docs/packaging.md); на Astra/РЕД ОС/Windows такой
+  модели разрешений нет.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Приложению нужен доступ к микрофону для аудиопротоколирования судебного заседания.</string>
+  </dict>
+</plist>

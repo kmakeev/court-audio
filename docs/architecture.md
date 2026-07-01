@@ -56,12 +56,17 @@ doc-комментарием о будущей роли.
 
 `.github/workflows/ci.yml` — матрица **macOS + Ubuntu + Windows**. Шаги:
 `cargo fmt --check`, `cargo clippy -D warnings`, `cargo check`, `npm run build`
-(`tsc` + Vite), `npm run tauri build`; артефакт Linux-сборки прикладывается.
-Astra SE / РЕД ОС — этап 08 (без правок кода).
+(`tsc` + Vite), `npm run tauri build`; артефакты сборки прикладываются под всю
+матрицу (Linux `deb`/`rpm`/`appimage`, Windows `nsis`/`msi`, macOS `dmg`).
+Сборка под Astra SE / РЕД ОС — ручной workflow
+[`package-domestic.yml`](../.github/workflows/package-domestic.yml) на совместимом
+билдере (этап 08). Упаковка, оффлайн-установка, подпись и обновления —
+[`packaging.md`](packaging.md).
 
 ## Открытые вопросы
 
-- **Bundle identifier / правообладатель.** На этапе 00 зафиксирован плейсхолдер
-  `ru.court.audioprotocol`. Перед подачей в Реестр отечественного ПО
-  (этап 08) согласовать с заказчиком финальный идентификатор и правообладателя
-  (`src-tauri/tauri.conf.json`).
+- **Bundle identifier / правообладатель.** Плейсхолдер `ru.court.audioprotocol`
+  сохранён на этапе 08 (решение с пользователем 2026-07-01: не выдумывать).
+  Перед подачей в Реестр отечественного ПО заказчик предоставляет финальный
+  идентификатор и правообладателя — правки в `src-tauri/tauri.conf.json` и
+  [`registry-checklist.md`](registry-checklist.md).
