@@ -5,7 +5,7 @@ name: CI
 # (без правок кода). См. promts/00_infra.md.
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
 
 jobs:
