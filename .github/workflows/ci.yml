@@ -29,8 +29,11 @@ jobs:
             librsvg2-dev \
             libayatana-appindicator3-dev \
             libssl-dev \
+            libasound2-dev \
             patchelf \
             rpm
+          # libasound2-dev — ALSA-заголовки для cpal (alsa-sys) на Linux;
+          # без них захват звука не компилируется. rpm — сборка .rpm-таргета.
           # rpm/rpmbuild — чтобы Tauri собрал .rpm-таргет для РЕД ОС на ubuntu-раннере
           # (сам пакет ставится в РЕД ОС; проверка установки — этап 08, docs/packaging.md).
 
