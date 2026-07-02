@@ -97,6 +97,11 @@ export interface CaseCacheSettings {
   max_records: number;
 }
 
+/** Живая разметка (метки/роли — фаза 2, этап 10). Роли берутся из `audio.roles`. */
+export interface MarkersSettings {
+  categories: string[];
+}
+
 export interface Settings {
   audio: AudioSettings;
   recorder: RecorderSettings;
@@ -107,6 +112,7 @@ export interface Settings {
   sync: SyncSettings;
   auth: AuthSettings;
   case_cache: CaseCacheSettings;
+  markers: MarkersSettings;
 }
 
 /** Прочитать настройки (Rust возвращает дефолты из реестра при отсутствии файла). */

@@ -136,6 +136,36 @@ export function SettingsScreen() {
             </Grid>
           </Card>
 
+          <Card>
+            <BlockHead
+              numeral="A2"
+              title="Разметка: метки и роли"
+              hint="Справочники живой разметки заседания (фаза 2). Доступны и без многоканала — оператор ведёт их заранее."
+            />
+            <Grid>
+              <Field
+                label="Категории закладок (через запятую)"
+                placeholder="Закладка, Инцидент, Перерыв, Прочее"
+                value={settings.markers.categories.join(', ')}
+                onChange={(e) =>
+                  update((d) => {
+                    d.markers.categories = splitList(e.target.value);
+                  })
+                }
+              />
+              <Field
+                label="Роли говорящих (через запятую)"
+                placeholder="judge, clerk, prosecution, defense, witness, room"
+                value={settings.audio.roles.join(', ')}
+                onChange={(e) =>
+                  update((d) => {
+                    d.audio.roles = splitList(e.target.value);
+                  })
+                }
+              />
+            </Grid>
+          </Card>
+
           <MultichannelCard
             settings={settings}
             errors={errors}
@@ -533,6 +563,14 @@ function describeError(e: unknown): string {
   return 'неизвестная ошибка';
 }
 
+/** Разобрать список «через запятую»: обрезать пробелы, отбросить пустые. */
+function splitList(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((r) => r.trim())
+    .filter((r) => r.length > 0);
+}
+
 // ── Многоканальная запись по ролям (этап 09) ─────────────────────────────────
 
 /**
@@ -570,9 +608,9 @@ function MultichannelCard({
   return (
     <Card>
       <BlockHead
-        numeral="A2"
+        numeral="A3"
         title="Многоканальная запись по ролям"
-        hint="Фаза 2: N синхронных дорожек, привязанных к ролям (судья, защита, …)"
+        hint="Фаза 2: N синхронных дорожек, привязанных к ролям (судья, защита, …). Справочник ролей — в разделе «Разметка: метки и роли» выше."
       />
       <Grid>
         <Labeled label="Режим">
@@ -597,19 +635,6 @@ function MultichannelCard({
       {enabled && (
         <>
           <Grid>
-            <Field
-              label="Справочник ролей (через запятую)"
-              placeholder="judge, clerk, prosecution, defense, witness, room"
-              value={audio.roles.join(', ')}
-              onChange={(e) =>
-                update((d) => {
-                  d.audio.roles = e.target.value
-                    .split(',')
-                    .map((r) => r.trim())
-                    .filter((r) => r.length > 0);
-                })
-              }
-            />
             <LabeledWithTip
               label="Опорная дорожка синхронизации"
               tip="Эталон времени: по частоте дискретизации этой дорожки выравниваются остальные при раздельных устройствах (компенсация дрейфа). На одном многоканальном интерфейсе с общим клоком дрейфа почти нет — параметр не срабатывает."

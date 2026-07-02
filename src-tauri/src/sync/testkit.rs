@@ -126,6 +126,7 @@ impl UploadTransport for FakeTransport {
         _token: &str,
         _recording_id: &str,
         _tracks: &[crate::store::export::TrackEntry],
+        _annotations: &crate::store::export::AnnotationsExport,
     ) -> Result<(), TransportError> {
         let mut st = self.state.lock().unwrap();
         if st.init_fails_left > 0 {

@@ -26,9 +26,10 @@ use crate::audio::capture::{
 use crate::audio::devices::{list_input_devices, DeviceInfo};
 use crate::audio::tracks::{resolve_tracks, ResolvedTrack};
 use crate::ipc::{load_settings, resolve_storage_root};
+use crate::ipc::marker_cmds::AnnotationState;
 use crate::recorder::journal::{Journal, JournalRecord};
 use crate::recorder::multitrack::{
-    self, track_dir, track_map_from_resolved, MultiCapture, TrackStartSpec,
+    self, track_dir, track_map_from_resolved, MultiCapture, TrackMap, TrackStartSpec,
 };
 use crate::recorder::recovery;
 use crate::reliability::disk_monitor::DiskThresholds;
@@ -71,6 +72,14 @@ pub struct ActiveSession {
     pub output_dir: PathBuf,
     /// Подкаталоги дорожек для журнала `Stopped` на стопе (многоканал).
     pub track_subdirs: Vec<PathBuf>,
+    /// Частота оси сессии (Гц) — для семпл-точных смещений разметки (этап 10).
+    pub sample_rate_hz: u32,
+    /// Автор разметки (оператор) — до экрана входа берётся из env (этап 10).
+    pub operator_id: String,
+    /// Карта дорожек (многоканал) — подстановка роли активной дорожки (этап 10).
+    pub track_map: Option<TrackMap>,
+    /// Живая разметка сессии (этап 10): write-ahead журнал + in-memory лог.
+    pub annotations: Mutex<AnnotationState>,
 }
 
 /// Управляемое Tauri состояние активной сессии захвата.
@@ -226,6 +235,13 @@ fn start_single(
             started_at_unix_ms,
             output_dir: output_dir.to_path_buf(),
             track_subdirs: Vec::new(),
+            // Ось разметки — фактическая (нативная) частота записи (этап 10).
+            sample_rate_hz: native.sample_rate_hz,
+            operator_id: operator_identity(),
+            track_map: None,
+            // Тот же журнал, что у reliability: записи разметки и сегментов в один
+            // файл сериализуются общим мьютексом (этап 10).
+            annotations: Mutex::new(AnnotationState::new(journal)),
         },
         reply: CaptureStarted {
             sample_rate_hz: native.sample_rate_hz,
@@ -299,12 +315,22 @@ fn start_multichannel(
 
     let multi = MultiCapture::start(specs, level_emit).map_err(|e| e.to_string())?;
     let track_count = multi.track_count() as u16;
+    // Журнал разметки — на корне сессии (дорожки пишут в свои подкаталоги, так что
+    // конфликта записей нет). Открываем в append (SessionStarted уже записан выше).
+    let annotation_journal = Journal::open(output_dir).map_err(|e| e.to_string())?;
     Ok(Started {
         active: ActiveSession {
             capture: ActiveCapture::Multi(multi),
             started_at_unix_ms,
             output_dir: output_dir.to_path_buf(),
             track_subdirs: subdirs,
+            // Ось разметки — общая номинальная частота сессии (этап 10).
+            sample_rate_hz: settings.audio.sample_rate_hz,
+            operator_id: operator_identity(),
+            track_map: Some(map),
+            annotations: Mutex::new(AnnotationState::new(Arc::new(Mutex::new(
+                annotation_journal,
+            )))),
         },
         reply: CaptureStarted {
             sample_rate_hz: settings.audio.sample_rate_hz,
@@ -593,6 +619,15 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Автор разметки: до экрана входа оператора — из env (тот же seam, что у
+/// выгрузки, см. [`crate::sync::OPERATOR_ID_ENV`]); пусто, если не задан.
+fn operator_identity() -> String {
+    std::env::var(crate::sync::OPERATOR_ID_ENV)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_default()
 }
 
 /// Собрать параметры захвата из настроек (реестр — единственный источник).

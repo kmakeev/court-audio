@@ -14,7 +14,7 @@ use super::StoreError;
 
 /// Текущая версия схемы манифеста. При изменении таблиц — инкремент + ветка в
 /// [`migrate`].
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Открыть (создав при необходимости) манифест-БД по пути и применить миграции.
 pub fn open(path: &Path) -> Result<Connection, StoreError> {
@@ -170,6 +170,30 @@ pub fn migrate(conn: &Connection) -> Result<(), StoreError> {
         )?;
         conn.pragma_update(None, "user_version", 3)?;
     }
+    if version < 4 {
+        // Этап 10 (метки/роли): живая разметка — append-only журнал действий под
+        // хеш-цепочкой. `seq` монотонен в рамках сессии; `chain_link` вычислен
+        // при постановке (реконсиляция не пере-хеширует). Легаси-сессии без
+        // разметки просто не имеют строк — таблица аддитивна.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS annotations (
+                session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                seq             INTEGER NOT NULL,
+                action          TEXT NOT NULL,
+                target_id       TEXT NOT NULL,
+                category        TEXT,
+                role            TEXT,
+                comment         TEXT,
+                offset_samples  INTEGER NOT NULL,
+                offset_ms       INTEGER NOT NULL,
+                operator_id     TEXT NOT NULL,
+                at_unix_ms      INTEGER NOT NULL,
+                chain_link      TEXT NOT NULL,
+                PRIMARY KEY (session_id, seq)
+            );",
+        )?;
+        conn.pragma_update(None, "user_version", 4)?;
+    }
     Ok(())
 }
 
@@ -208,6 +232,7 @@ mod tests {
             "upload_state",
             "upload_parts",
             "tracks",
+            "annotations",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -349,6 +374,47 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ptid, 0);
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrate_v3_to_v4_adds_annotations_and_preserves_data() {
+        // Схема v3: сессия + дорожка + сегмент; таблицы annotations ещё нет.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, dir TEXT NOT NULL, started_at_unix_ms INTEGER NOT NULL,
+                status TEXT NOT NULL, station_id TEXT NOT NULL, operator_id TEXT NOT NULL,
+                adjudication_ref TEXT, sample_rate_hz INTEGER NOT NULL, channels INTEGER NOT NULL,
+                bit_depth INTEGER NOT NULL, final_chain_link TEXT, upload_status TEXT NOT NULL,
+                server_integrity_verified INTEGER NOT NULL DEFAULT 0, confirmed_at_unix_ms INTEGER,
+                local_purged_at_unix_ms INTEGER, upload_paused INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO sessions (id, dir, started_at_unix_ms, status, station_id, operator_id,
+                sample_rate_hz, channels, bit_depth, upload_status)
+                VALUES ('s1','/rec/s1',1,'stopped','st','op',44100,1,16,'pending');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 3).unwrap();
+
+        migrate(&conn).unwrap();
+
+        // Таблица annotations появилась, сессия цела.
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='annotations'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let sid: String = conn
+            .query_row("SELECT id FROM sessions WHERE id='s1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(sid, "s1");
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

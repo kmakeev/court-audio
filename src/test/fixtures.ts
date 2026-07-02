@@ -54,6 +54,9 @@ export function settingsFixture(): Settings {
       ttl_hours: 24,
       max_records: 500,
     },
+    markers: {
+      categories: ['Закладка', 'Инцидент', 'Перерыв', 'Прочее'],
+    },
   };
 }
 

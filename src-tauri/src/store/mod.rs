@@ -7,6 +7,7 @@
 //! записи в JSON для серверной верификации ([`export`], контракт `07`); движок
 //! локального ретеншна ([`retention`]) — зеркало серверного `purge_expired_uploads`.
 
+pub mod annotations;
 pub mod case_binding;
 pub mod case_cache;
 pub mod crypto;

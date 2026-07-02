@@ -28,6 +28,13 @@ function wireDefaults(recoverable: unknown[] = []) {
   }));
   setInvoke('search_cases', () => []);
   setInvoke('bind_session_case', () => undefined);
+  // Этап 10 — живая разметка. По умолчанию пусто; тесты переопределяют по месту.
+  setInvoke('list_annotations', () => ({ markers: [], role_spans: [] }));
+  setInvoke('add_marker', () => ({ markers: [], role_spans: [] }));
+  setInvoke('edit_marker', () => ({ markers: [], role_spans: [] }));
+  setInvoke('remove_marker', () => ({ markers: [], role_spans: [] }));
+  setInvoke('start_role_span', () => ({ markers: [], role_spans: [] }));
+  setInvoke('end_role_span', () => ({ markers: [], role_spans: [] }));
 }
 
 function renderRecord() {
@@ -235,6 +242,67 @@ describe('RecordScreen', () => {
     );
     expect(screen.getByText('Продолжить')).toBeInTheDocument();
     expect(screen.getByText('Закрыть')).toBeInTheDocument();
+  });
+
+  it('живая разметка: ставит закладку кнопкой категории и показывает её в списке', async () => {
+    wireDefaults();
+    const added = vi.fn();
+    // add_marker возвращает снимок с новой меткой — UI её отрисует.
+    setInvoke('add_marker', (args) => {
+      added(args);
+      return {
+        markers: [
+          {
+            id: 'm1',
+            category: (args as { category: string }).category,
+            comment: null,
+            offset_samples: 44100,
+            offset_ms: 1000,
+            operator_id: 'op',
+            at_unix_ms: 1,
+          },
+        ],
+        role_spans: [],
+      };
+    });
+    renderRecord();
+    await screen.findByText('Готов к записи');
+    await act(async () => {
+      emitEvent('capture_state', { state: 'recording' });
+    });
+
+    // Карта разметки видна во время записи; кнопка категории с горячей цифрой.
+    const catBtn = await screen.findByText('1 · Закладка');
+    fireEvent.click(catBtn);
+
+    await waitFor(() =>
+      expect(added).toHaveBeenCalledWith({ category: 'Закладка', comment: null }),
+    );
+    // Метка появилась в списке (селект категории + счётчик).
+    expect(await screen.findByText('Метки сессии (1)')).toBeInTheDocument();
+  });
+
+  it('живая разметка: горячая клавиша цифры ставит закладку соответствующей категории', async () => {
+    wireDefaults();
+    const added = vi.fn();
+    setInvoke('add_marker', (args) => {
+      added(args);
+      return { markers: [], role_spans: [] };
+    });
+    renderRecord();
+    await screen.findByText('Готов к записи');
+    await act(async () => {
+      emitEvent('capture_state', { state: 'recording' });
+    });
+    await screen.findByText('Живая разметка');
+
+    // Цифра «2» → вторая категория справочника (Инцидент).
+    await act(async () => {
+      fireEvent.keyDown(window, { key: '2' });
+    });
+    await waitFor(() =>
+      expect(added).toHaveBeenCalledWith({ category: 'Инцидент', comment: null }),
+    );
   });
 
   it('привязывает дело к стартовавшей сессии (ручной ввод → bind_session_case)', async () => {

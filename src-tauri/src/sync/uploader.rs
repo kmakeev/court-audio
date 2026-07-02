@@ -109,9 +109,9 @@ pub fn upload_session(
         }
     };
 
-    // 2. Заявка состава: дорожки с ролями и их сегменты (один раз).
+    // 2. Заявка состава: дорожки с ролями, их сегменты и живая разметка (один раз).
     if !queue::is_init_done(store, session_id)? {
-        transport.init_upload(token, &recording_id, &manifest.tracks)?;
+        transport.init_upload(token, &recording_id, &manifest.tracks, &manifest.annotations)?;
         queue::mark_init_done(store, session_id)?;
     }
 

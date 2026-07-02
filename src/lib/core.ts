@@ -216,6 +216,87 @@ export function resumeUpload(dir: string): Promise<void> {
   return invoke('resume_upload', { dir });
 }
 
+// ── Живая разметка (этап 10: ipc::marker_cmds / integrity::annotations) ─────
+
+/** Закладка в текущем состоянии (integrity::annotations::MarkerState). */
+export interface MarkerState {
+  id: string;
+  category: string;
+  comment?: string;
+  offset_samples: number;
+  offset_ms: number;
+  operator_id: string;
+  at_unix_ms: number;
+}
+
+/** Интервал роли (RoleSpanState). `end_*` отсутствует, пока интервал открыт. */
+export interface RoleSpanState {
+  id: string;
+  role: string;
+  start_offset_samples: number;
+  start_offset_ms: number;
+  end_offset_samples?: number | null;
+  end_offset_ms?: number | null;
+  operator_id: string;
+  at_unix_ms: number;
+}
+
+/** Свёрнутое состояние разметки активной сессии (AnnotationSnapshot). */
+export interface AnnotationSnapshot {
+  markers: MarkerState[];
+  role_spans: RoleSpanState[];
+}
+
+/** Поставить закладку в текущий момент записи (категория из справочника). */
+export function addMarker(
+  category: string,
+  comment?: string | null,
+): Promise<AnnotationSnapshot> {
+  return invoke<AnnotationSnapshot>('add_marker', { category, comment: comment ?? null });
+}
+
+/** Изменить категорию/комментарий закладки (фиксируется отдельным действием). */
+export function editMarker(
+  targetId: string,
+  category: string,
+  comment?: string | null,
+): Promise<AnnotationSnapshot> {
+  return invoke<AnnotationSnapshot>('edit_marker', {
+    targetId,
+    category,
+    comment: comment ?? null,
+  });
+}
+
+/** Удалить закладку (до завершения сессии). */
+export function removeMarker(targetId: string): Promise<AnnotationSnapshot> {
+  return invoke<AnnotationSnapshot>('remove_marker', { targetId });
+}
+
+/**
+ * Начать интервал «сейчас говорит <роль>». Роль явная, либо подставляется из
+ * активной дорожки по `trackId` (многоканал — этап 09).
+ */
+export function startRoleSpan(
+  role?: string | null,
+  trackId?: number | null,
+): Promise<AnnotationSnapshot> {
+  return invoke<AnnotationSnapshot>('start_role_span', {
+    role: role ?? null,
+    trackId: trackId ?? null,
+  });
+}
+
+/** Завершить интервал роли в текущий момент записи. */
+export function endRoleSpan(targetId: string): Promise<AnnotationSnapshot> {
+  return invoke<AnnotationSnapshot>('end_role_span', { targetId });
+}
+
+/** Текущая разметка активной сессии (метки/интервалы). */
+export function listAnnotations(): Promise<AnnotationSnapshot> {
+  return invoke<AnnotationSnapshot>('list_annotations');
+}
+
 // ── Привязка к делу (этап 05: store::case_binding / store::case_cache) ──────
 
 /** Состояние привязки (store::case_binding::BindingKind). */

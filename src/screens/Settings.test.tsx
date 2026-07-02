@@ -46,6 +46,29 @@ describe('SettingsScreen', () => {
     expect(save).toBeDisabled();
   });
 
+  it('справочники разметки (роли/категории) правятся без включения многоканала', async () => {
+    const saved = vi.fn();
+    setInvoke('get_settings', () => settingsFixture());
+    setInvoke('save_settings', (args) => {
+      saved(args);
+    });
+    renderSettings();
+
+    // Поля доступны сразу (многоканал выключен по умолчанию).
+    const roles = await screen.findByLabelText('Роли говорящих (через запятую)');
+    const categories = await screen.findByLabelText('Категории закладок (через запятую)');
+    expect(screen.queryByText('Включить многоканальный захват')).toBeInTheDocument();
+
+    fireEvent.change(roles, { target: { value: 'judge, defense, expert' } });
+    fireEvent.change(categories, { target: { value: 'Закладка, Реплика' } });
+
+    fireEvent.click(screen.getByText('Сохранить'));
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
+    const payload = saved.mock.calls[0][0].settings;
+    expect(payload.audio.roles).toEqual(['judge', 'defense', 'expert']);
+    expect(payload.markers.categories).toEqual(['Закладка', 'Реплика']);
+  });
+
   it('многоканал: включение без дорожек — ошибка, добавление дорожки с ролью — валидно', async () => {
     const saved = vi.fn();
     setInvoke('get_settings', () => settingsFixture());

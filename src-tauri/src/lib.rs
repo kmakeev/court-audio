@@ -47,7 +47,13 @@ pub fn run() {
             ipc::case_cmds::bind_session_case,
             ipc::sync_cmds::retry_upload,
             ipc::sync_cmds::pause_upload,
-            ipc::sync_cmds::resume_upload
+            ipc::sync_cmds::resume_upload,
+            ipc::marker_cmds::add_marker,
+            ipc::marker_cmds::edit_marker,
+            ipc::marker_cmds::remove_marker,
+            ipc::marker_cmds::start_role_span,
+            ipc::marker_cmds::end_role_span,
+            ipc::marker_cmds::list_annotations
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска приложения «Аудиопротокол»");

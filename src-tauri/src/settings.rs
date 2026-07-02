@@ -470,6 +470,37 @@ impl Default for CaseCacheSettings {
     }
 }
 
+// ── Разметка (метки/роли — фаза 2, этап 10) ──────────────────────────────────
+
+/// `markers.*` — живая разметка заседания (этап 10). Роли интервалов
+/// переиспользуют справочник `audio.roles`; здесь — только справочник категорий
+/// закладок.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MarkersSettings {
+    /// `markers.categories` — справочник категорий закладок (человекочитаемые
+    /// ярлыки; значение уходит в W2.11 как подсказка категории). Настраивается
+    /// заказчиком; дефолт — минимальный набор.
+    #[serde(default = "default_marker_categories")]
+    pub categories: Vec<String>,
+}
+
+impl Default for MarkersSettings {
+    fn default() -> Self {
+        Self {
+            categories: default_marker_categories(),
+        }
+    }
+}
+
+/// Дефолтный справочник категорий закладок (`configuration.md` →
+/// `markers.categories`) — согласованный с заказчиком минимальный набор.
+fn default_marker_categories() -> Vec<String> {
+    ["Закладка", "Инцидент", "Перерыв", "Прочее"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 // ── Корневая модель ───────────────────────────────────────────────────────────
 
 /// Полная схема настроек станции. Сериализуется в JSON (файл конфигурации
@@ -486,6 +517,9 @@ pub struct Settings {
     pub sync: SyncSettings,
     pub auth: AuthSettings,
     pub case_cache: CaseCacheSettings,
+    /// Живая разметка (метки/роли — фаза 2, этап 10). `#[serde(default)]` на корне
+    /// уже покрывает отсутствие ключа в конфигах v1/09.
+    pub markers: MarkersSettings,
 }
 
 #[cfg(test)]
@@ -523,6 +557,11 @@ mod tests {
         assert_eq!(s.audio.sync.drift_threshold_ms, 50);
         assert!(s.audio.sync.drift_compensate);
         assert!(!s.audio.master_downmix.enabled);
+        // Разметка (фаза 2): справочник категорий — минимальный набор по умолчанию.
+        assert_eq!(
+            s.markers.categories,
+            vec!["Закладка", "Инцидент", "Перерыв", "Прочее"]
+        );
     }
 
     #[test]

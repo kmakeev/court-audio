@@ -1,25 +1,32 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import { BlockHead, Button, Card, CriticalNotice, ProgressBar, Select, Tag } from '../design';
 import { CasePicker } from '../components/CasePicker';
 import { ConfirmDialog } from '../shell/ConfirmDialog';
 import {
+  addMarker,
   bindSessionCase,
   discardSession,
+  editMarker,
+  endRoleSpan,
   getCaptureStatus,
+  listAnnotations,
   listAudioDevices,
   onAudioLevel,
   onCaptureState,
   onReliabilityWarning,
   pauseCapture,
   recoverSession,
+  removeMarker,
   resumeCapture,
   scanRecoverable,
   startCapture,
   startMonitor,
+  startRoleSpan,
   stopCapture,
   stopMonitor,
   type AdjudicationRef,
+  type AnnotationSnapshot,
   type CaptureStateValue,
   type ChannelLevel,
   type DeviceInfo,
@@ -552,6 +559,16 @@ export function RecordScreen() {
         )}
       </Card>
 
+      {/* Живая разметка (этап 10): закладки и роли по ходу заседания. Видна
+          только при активной сессии; действия идут вне аудио-потока. */}
+      {isActive && settings && (
+        <LiveAnnotations
+          settings={settings}
+          levels={levels}
+          onError={setError}
+        />
+      )}
+
       {/* Фаза сохранения после стопа: финализация может занять время —
           показываем прогресс, чтобы станция не казалась «зависшей». */}
       {saving && (
@@ -621,6 +638,217 @@ export function RecordScreen() {
       />
     </div>
   );
+}
+
+// ── Живая разметка: закладки + интервалы ролей (этап 10) ─────────────────────
+// Кнопки категорий/ролей с минимальным трением (горячие клавиши цифрами),
+// список меток с правкой/удалением, открытые интервалы ролей. Все действия —
+// асинхронные команды ядра (вне аудио-потока), результат — свёрнутый снимок.
+function LiveAnnotations({
+  settings,
+  levels,
+  onError,
+}: {
+  settings: Settings;
+  levels: Record<number, LevelEvent>;
+  onError: (e: string | null) => void;
+}) {
+  const [ann, setAnn] = useState<AnnotationSnapshot>({ markers: [], role_spans: [] });
+  const [comment, setComment] = useState('');
+  const categories = settings.markers.categories;
+  const roles = settings.audio.roles;
+  const multichannel = settings.audio.multichannel.enabled && settings.audio.tracks.length > 0;
+
+  // Подтянуть текущую разметку при появлении карты (сессия могла идти в фоне).
+  useEffect(() => {
+    listAnnotations()
+      .then(setAnn)
+      .catch(() => {});
+  }, []);
+
+  // Выполнить команду разметки: снимок заменяет состояние, ошибка — в баннер.
+  const run = useCallback(
+    (p: Promise<AnnotationSnapshot>) => {
+      p.then(setAnn).catch((e: unknown) => onError(describeError(e)));
+    },
+    [onError],
+  );
+
+  const onAddMarker = useCallback(
+    (category: string) => {
+      run(addMarker(category, comment || null));
+      setComment('');
+    },
+    [run, comment],
+  );
+
+  // Активная (самая громкая) дорожка — для подстановки роли (многоканал).
+  const activeTrackId = useMemo(() => {
+    let best: number | null = null;
+    let bestRms = -1;
+    for (const [id, ev] of Object.entries(levels)) {
+      const rms = ev.channels.reduce((m, c) => Math.max(m, c.rms), 0);
+      if (rms > bestRms) {
+        bestRms = rms;
+        best = Number(id);
+      }
+    }
+    return best;
+  }, [levels]);
+  const suggestedRole =
+    multichannel && activeTrackId != null ? settings.audio.tracks[activeTrackId]?.role : undefined;
+
+  // Горячие клавиши: цифры 1..N — категории закладок. Не перехватываем при
+  // фокусе в поле ввода (комментарий/№ дела). Совместимо с R/S/Пробел выше.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      const n = Number(e.key);
+      if (Number.isInteger(n) && n >= 1 && n <= categories.length) {
+        e.preventDefault();
+        onAddMarker(categories[n - 1]);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [categories, onAddMarker]);
+
+  const openSpans = ann.role_spans.filter((s) => s.end_offset_ms == null);
+
+  return (
+    <Card>
+      <BlockHead
+        numeral="C"
+        title="Живая разметка"
+        hint="Закладки и роли говорящих по ходу заседания — подсказки для протокола"
+      />
+
+      {/* Комментарий к следующей закладке (опционально). */}
+      <label style={{ display: 'block', marginTop: 12 }}>
+        <span style={fieldLabelStyle}>Комментарий к закладке (необязательно)</span>
+        <input
+          aria-label="Комментарий к закладке"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          placeholder="например: реплика свидетеля"
+          style={{
+            width: '100%',
+            padding: '8px 10px',
+            border: '1px solid var(--hairline)',
+            background: 'var(--paper)',
+            color: 'var(--ink)',
+            fontSize: 13,
+          }}
+        />
+      </label>
+
+      {/* Кнопки категорий (горячие клавиши — цифры). */}
+      <div style={{ marginTop: 14 }}>
+        <span style={fieldLabelStyle}>Поставить закладку</span>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {categories.map((c, i) => (
+            <Button
+              key={c}
+              variant="secondary"
+              style={NEUTRAL_BTN}
+              onClick={() => onAddMarker(c)}
+            >
+              {i < 9 ? `${i + 1} · ` : ''}
+              {c}
+            </Button>
+          ))}
+          {categories.length === 0 && (
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+              Категории не заданы — настройте справочник в «Настройках».
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Кнопки ролей + подстановка активной дорожки (многоканал). */}
+      <div style={{ marginTop: 16 }}>
+        <span style={fieldLabelStyle}>Отметить, кто говорит</span>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {suggestedRole && activeTrackId != null && (
+            <Button variant="primary" onClick={() => run(startRoleSpan(null, activeTrackId))}>
+              ● Активная дорожка: {suggestedRole}
+            </Button>
+          )}
+          {roles.map((r) => (
+            <Button key={r} variant="secondary" style={NEUTRAL_BTN} onClick={() => run(startRoleSpan(r))}>
+              {r}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      {/* Открытые интервалы ролей — можно завершить. */}
+      {openSpans.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <span style={fieldLabelStyle}>Идёт речь</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {openSpans.map((s) => (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Tag tone="accent">{s.role}</Tag>
+                <span className="num" style={{ fontSize: 12, color: 'var(--ink-soft)', flex: 1 }}>
+                  с {formatClock(Math.floor(s.start_offset_ms / 1000))}
+                </span>
+                <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => run(endRoleSpan(s.id))}>
+                  Завершить
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Список меток с правкой категории и удалением (таймлайн-обзор). */}
+      <div style={{ marginTop: 16 }}>
+        <span style={fieldLabelStyle}>Метки сессии ({ann.markers.length})</span>
+        {ann.markers.length === 0 ? (
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>Меток пока нет.</p>
+        ) : (
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {ann.markers.map((m) => (
+              <li
+                key={m.id}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+              >
+                <span className="num" style={{ fontSize: 12, color: 'var(--ink)', width: 72 }}>
+                  {formatClock(Math.floor(m.offset_ms / 1000))}
+                </span>
+                <div style={{ minWidth: 180 }}>
+                  <Select
+                    ariaLabel={`Категория метки ${formatClock(Math.floor(m.offset_ms / 1000))}`}
+                    value={m.category}
+                    onChange={(v) => run(editMarker(m.id, v, m.comment ?? null))}
+                    options={categoryOptions(categories, m.category)}
+                  />
+                </div>
+                {m.comment && (
+                  <span style={{ fontSize: 12, color: 'var(--ink-soft)', flex: 1 }}>{m.comment}</span>
+                )}
+                <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => run(removeMarker(m.id))}>
+                  Удалить
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+// Опции селекта категории метки: справочник + текущая категория, если её уже нет
+// в справочнике (не теряем историческое значение при правке).
+function categoryOptions(categories: string[], current: string) {
+  const opts = categories.map((c) => ({ value: c, label: c }));
+  if (current && !categories.includes(current)) {
+    opts.unshift({ value: current, label: `${current} (вне справочника)` });
+  }
+  return opts;
 }
 
 // Преобразование линейной амплитуды [0..1] в проценты шкалы по дБFS: тихая речь

@@ -274,7 +274,7 @@ pub fn reset_for_retry(store: &ManifestStore, session_id: &str) -> Result<(), St
 mod tests {
     use super::*;
     use crate::store::export::{
-        IntegrityMeta, RecordingManifest, SegmentEntry, SessionMeta, TrackEntry,
+        AnnotationsExport, IntegrityMeta, RecordingManifest, SegmentEntry, SessionMeta, TrackEntry,
     };
     use crate::store::manifest::SessionStatus;
 
@@ -307,7 +307,7 @@ mod tests {
             .collect::<Vec<_>>();
         let track_count = tracks.len() as u32;
         RecordingManifest {
-            manifest_version: 2,
+            manifest_version: 3,
             session: SessionMeta {
                 id: "s1".into(),
                 started_at_unix_ms: 1,
@@ -328,6 +328,7 @@ mod tests {
             },
             tracks,
             events: vec![],
+            annotations: AnnotationsExport::default(),
         }
     }
 

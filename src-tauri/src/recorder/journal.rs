@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::integrity::annotations::AnnotationRecord;
+
 /// Имя файла журнала в каталоге сессии.
 pub const JOURNAL_FILE_NAME: &str = "session.journal";
 
@@ -65,6 +67,9 @@ pub enum JournalRecord {
     Recovered,
     /// Корректное завершение сессии.
     Stopped,
+    /// Живая разметка (этап 10): закладка/интервал роли — действие оператора
+    /// вне аудио-потока. Write-ahead: переживает сбой, реконсилируется в SQLite.
+    Annotation(AnnotationRecord),
 }
 
 /// Открытый на дозапись журнал сессии.
@@ -111,6 +116,8 @@ pub struct ReplayState {
     pub stopped: bool,
     /// Сессия уже помечена восстановленной (встречена запись `Recovered`).
     pub recovered: bool,
+    /// Действия разметки в порядке журнала (этап 10).
+    pub annotations: Vec<AnnotationRecord>,
 }
 
 /// Метаданные формата сессии из записи `SessionStarted`.
@@ -150,6 +157,7 @@ pub fn replay(path: &Path) -> std::io::Result<ReplayState> {
         completed_segments: Vec::new(),
         stopped: false,
         recovered: false,
+        annotations: Vec::new(),
     };
 
     for line in reader.lines() {
@@ -189,6 +197,7 @@ pub fn replay(path: &Path) -> std::io::Result<ReplayState> {
             }),
             JournalRecord::Recovered => state.recovered = true,
             JournalRecord::Stopped => state.stopped = true,
+            JournalRecord::Annotation(rec) => state.annotations.push(rec),
             _ => {}
         }
     }
@@ -279,6 +288,38 @@ mod tests {
         assert!(state.started.is_some());
         assert_eq!(state.completed_segments.len(), 0);
         assert!(state.is_unfinished());
+    }
+
+    #[test]
+    fn annotation_records_roundtrip_and_replay() {
+        use crate::integrity::annotations::{AnnotationAction, AnnotationRecord};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut j = Journal::open(tmp.path()).unwrap();
+        j.append(&meta_record()).unwrap();
+        let ann = AnnotationRecord {
+            seq: 1,
+            action: AnnotationAction::MarkerAdded,
+            target_id: "m1".into(),
+            category: Some("Инцидент".into()),
+            role: None,
+            comment: Some("шум в зале".into()),
+            offset_samples: 44_100,
+            offset_ms: 1_000,
+            operator_id: "op-7".into(),
+            at_unix_ms: 1_700_000_001_000,
+            chain_link: "link1".into(),
+        };
+        let rec = JournalRecord::Annotation(ann.clone());
+        let json = serde_json::to_string(&rec).unwrap();
+        assert!(json.contains("\"type\":\"annotation\""));
+        assert!(json.contains("\"action\":\"marker_added\""));
+        j.append(&rec).unwrap();
+        j.append(&JournalRecord::Stopped).unwrap();
+
+        let state = replay(j.path()).unwrap();
+        assert_eq!(state.annotations.len(), 1);
+        assert_eq!(state.annotations[0], ann);
+        assert!(state.stopped);
     }
 
     #[test]

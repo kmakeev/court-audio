@@ -17,12 +17,14 @@ use serde::{Deserialize, Serialize};
 use super::manifest::{ManifestStore, SessionStatus, TrackRecord, UploadStatus};
 use super::StoreError;
 use crate::audio::tracks::SINGLE_TRACK_ROLE;
+use crate::integrity::annotations::{self, AnnotationRecord, MarkerState, RoleSpanState};
 use crate::integrity::events::RecordingEvent;
 
 /// Версия схемы манифеста записи. Инкремент — при изменении состава полей
 /// (синхронно с серверным `verify`). v2 — многоканал: сегменты сгруппированы по
-/// дорожкам (`tracks[]`).
-pub const MANIFEST_VERSION: u32 = 2;
+/// дорожкам (`tracks[]`). v3 — живая разметка: блок `annotations` (метки/роли
+/// как подсказки W2.11 + хеш-цепочный лог для верификации).
+pub const MANIFEST_VERSION: u32 = 3;
 
 /// Полный экспортируемый манифест записи.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,6 +35,21 @@ pub struct RecordingManifest {
     /// Дорожки записи (для одноканальной v1 — ровно одна, роль `single`).
     pub tracks: Vec<TrackEntry>,
     pub events: Vec<RecordingEvent>,
+    /// Живая разметка (этап 10): закладки/интервалы ролей — подсказки для
+    /// диаризации/протокола W2.11 + хеш-цепочный лог действий.
+    pub annotations: AnnotationsExport,
+}
+
+/// Разметка в манифесте: свёрнутое текущее состояние (метки/интервалы — подсказки
+/// W2.11) + полный append-only лог действий под хеш-цепочкой (для серверного
+/// verify целостности разметки). `chain_final_link` — итог цепочки лога.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnnotationsExport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain_final_link: Option<String>,
+    pub markers: Vec<MarkerState>,
+    pub role_spans: Vec<RoleSpanState>,
+    pub log: Vec<AnnotationRecord>,
 }
 
 /// Метаданные сессии в манифесте.
@@ -148,6 +165,16 @@ pub fn build_manifest(
         .map(|e| e.event)
         .collect();
 
+    // Разметка (этап 10): полный лог + свёрнутые метки/интервалы для W2.11.
+    let log = store.get_annotations(session_id)?;
+    let snapshot = annotations::fold(&log);
+    let annotations_export = AnnotationsExport {
+        chain_final_link: annotations::final_link(&log),
+        markers: snapshot.markers,
+        role_spans: snapshot.role_spans,
+        log,
+    };
+
     Ok(RecordingManifest {
         manifest_version: MANIFEST_VERSION,
         session: SessionMeta {
@@ -170,6 +197,7 @@ pub fn build_manifest(
         },
         tracks,
         events,
+        annotations: annotations_export,
     })
 }
 
@@ -370,6 +398,80 @@ mod tests {
         let dh: Vec<String> = d.segments.iter().map(|s| s.sha256.clone()).collect();
         let dl: Vec<String> = d.segments.iter().map(|s| s.chain_link.clone()).collect();
         assert!(hash::verify_chain(&dh, &dl, d.final_chain_link.as_deref()));
+    }
+
+    #[test]
+    fn manifest_carries_annotations_with_chain_and_snapshot() {
+        use crate::integrity::annotations::{
+            build_annotation_chain, verify_annotation_chain, AnnotationAction, AnnotationRecord,
+        };
+        let store = seed_store();
+        // Разметка: закладка + правка её категории + открытый интервал роли.
+        let mut recs = vec![
+            AnnotationRecord {
+                seq: 1,
+                action: AnnotationAction::MarkerAdded,
+                target_id: "m1".into(),
+                category: Some("Инцидент".into()),
+                role: None,
+                comment: None,
+                offset_samples: 44_100,
+                offset_ms: 1_000,
+                operator_id: "op-7".into(),
+                at_unix_ms: 1_700_000_001_000,
+                chain_link: String::new(),
+            },
+            AnnotationRecord {
+                seq: 2,
+                action: AnnotationAction::MarkerEdited,
+                target_id: "m1".into(),
+                category: Some("Прочее".into()),
+                role: None,
+                comment: Some("уточнено".into()),
+                offset_samples: 0,
+                offset_ms: 0,
+                operator_id: "op-7".into(),
+                at_unix_ms: 1_700_000_001_500,
+                chain_link: String::new(),
+            },
+            AnnotationRecord {
+                seq: 3,
+                action: AnnotationAction::RoleStarted,
+                target_id: "r1".into(),
+                category: None,
+                role: Some("judge".into()),
+                comment: None,
+                offset_samples: 88_200,
+                offset_ms: 2_000,
+                operator_id: "op-7".into(),
+                at_unix_ms: 1_700_000_002_000,
+                chain_link: String::new(),
+            },
+        ];
+        let chain = build_annotation_chain(&recs);
+        for (r, link) in recs.iter_mut().zip(chain) {
+            r.chain_link = link;
+        }
+        for r in &recs {
+            store.append_annotation("sess-1", r).unwrap();
+        }
+
+        let m = build_manifest(&store, "sess-1", "sha256", true).unwrap();
+        assert_eq!(m.manifest_version, 3);
+        // Лог целиком под верифицируемой цепочкой.
+        assert_eq!(m.annotations.log.len(), 3);
+        assert!(verify_annotation_chain(&m.annotations.log));
+        assert_eq!(
+            m.annotations.chain_final_link.as_deref(),
+            Some(recs.last().unwrap().chain_link.as_str())
+        );
+        // Свёртка: одна метка (правка применена, смещение сохранено) + один интервал.
+        assert_eq!(m.annotations.markers.len(), 1);
+        assert_eq!(m.annotations.markers[0].category, "Прочее");
+        assert_eq!(m.annotations.markers[0].offset_samples, 44_100);
+        assert_eq!(m.annotations.role_spans.len(), 1);
+        assert_eq!(m.annotations.role_spans[0].role, "judge");
+        assert_eq!(m.annotations.role_spans[0].end_offset_samples, None);
     }
 
     #[test]

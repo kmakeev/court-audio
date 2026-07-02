@@ -610,6 +610,9 @@ impl ManifestStore {
             .execute("DELETE FROM segments WHERE session_id = ?1", [session_id])?;
         self.conn
             .execute("DELETE FROM events WHERE session_id = ?1", [session_id])?;
+        // Разметка (этап 10) — тоже локальная копия, удаляется при purge.
+        self.conn
+            .execute("DELETE FROM annotations WHERE session_id = ?1", [session_id])?;
         Ok(())
     }
 }

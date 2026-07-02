@@ -93,8 +93,24 @@ pub fn reconcile_session(store: &ManifestStore, dir: &Path) -> Result<Option<Str
         reconcile_segments(store, &id, dir, &state.completed_segments)?;
     }
     reconcile_events(store, &id, &meta.started_at_unix_ms, &state)?;
+    reconcile_annotations(store, &id, &state.annotations)?;
 
     Ok(Some(id))
+}
+
+/// Реконсилировать живую разметку (этап 10) из журнала в SQLite. `chain_link`
+/// вычислен при постановке — не пере-хешируем; вставка идемпотентна (по `seq`),
+/// поэтому повторный прогон дублей не плодит. Так метки/интервалы переживают
+/// рестарт (журнал — write-ahead «последняя инстанция»).
+fn reconcile_annotations(
+    store: &ManifestStore,
+    session_id: &str,
+    annotations: &[crate::integrity::annotations::AnnotationRecord],
+) -> Result<(), StoreError> {
+    for rec in annotations {
+        store.append_annotation(session_id, rec)?;
+    }
+    Ok(())
 }
 
 /// Пересчитать SHA-256 и хеш-цепочку по файлам завершённых сегментов
@@ -414,6 +430,64 @@ mod tests {
             let links: Vec<String> = segs.iter().map(|s| s.chain_link.clone()).collect();
             assert!(hash::verify_chain(&hashes, &links, t.final_chain_link.as_deref()));
         }
+    }
+
+    #[test]
+    fn annotations_survive_restart_via_reconcile() {
+        use crate::integrity::annotations::{
+            build_annotation_chain, verify_annotation_chain, AnnotationAction, AnnotationRecord,
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, _files) = build_session_dir(tmp.path(), "sess-1", false);
+
+        // Оператор ставит разметку в ходе записи (журнал — write-ahead).
+        let mut recs = vec![
+            AnnotationRecord {
+                seq: 1,
+                action: AnnotationAction::MarkerAdded,
+                target_id: "m1".into(),
+                category: Some("Инцидент".into()),
+                role: None,
+                comment: Some("шум".into()),
+                offset_samples: 44_100,
+                offset_ms: 1_000,
+                operator_id: "op-7".into(),
+                at_unix_ms: 1_700_000_001_000,
+                chain_link: String::new(),
+            },
+            AnnotationRecord {
+                seq: 2,
+                action: AnnotationAction::RoleStarted,
+                target_id: "s1".into(),
+                category: None,
+                role: Some("judge".into()),
+                comment: None,
+                offset_samples: 88_200,
+                offset_ms: 2_000,
+                operator_id: "op-7".into(),
+                at_unix_ms: 1_700_000_002_000,
+                chain_link: String::new(),
+            },
+        ];
+        let chain = build_annotation_chain(&recs);
+        for (r, link) in recs.iter_mut().zip(chain) {
+            r.chain_link = link;
+        }
+        let mut journal = Journal::open(&dir).unwrap();
+        for r in &recs {
+            journal.append(&JournalRecord::Annotation(r.clone())).unwrap();
+        }
+
+        // «Рестарт»: чистый манифест, реконсиляция из журнала.
+        let store = ManifestStore::in_memory().unwrap();
+        reconcile_session(&store, &dir).unwrap();
+        let back = store.get_annotations("sess-1").unwrap();
+        assert_eq!(back, recs);
+        assert!(verify_annotation_chain(&back));
+
+        // Идемпотентно: повторный прогон не плодит дублей.
+        reconcile_session(&store, &dir).unwrap();
+        assert_eq!(store.get_annotations("sess-1").unwrap().len(), 2);
     }
 
     #[test]

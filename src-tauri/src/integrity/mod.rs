@@ -5,5 +5,6 @@
 //! (старт/пауза/обрыв/…, `integrity.event_log`). ГОСТ ЭЦП (КриптоПро) —
 //! фаза 2 (`integrity.gost_sign`), здесь не реализуется.
 
+pub mod annotations;
 pub mod events;
 pub mod hash;

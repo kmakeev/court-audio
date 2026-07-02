@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::export::TrackEntry;
+use crate::store::export::{AnnotationsExport, TrackEntry};
 
 /// Класс ошибки транспорта: временная (ретраить) или постоянная (не ретраить).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,12 +91,14 @@ pub trait UploadTransport: Send + Sync {
     fn register_session(&self, token: &str, meta: &SessionMeta) -> Result<String, TransportError>;
 
     /// Заявить состав записи: **дорожки** с ролями и их сегментами (размеры +
-    /// SHA-256 + звенья цепочки). Роли доходят до диаризации W2.11 (этап 09).
+    /// SHA-256 + звенья цепочки) плюс **живую разметку** (метки/интервалы ролей —
+    /// подсказки W2.11, этап 10). Роли доходят до диаризации W2.11 (этап 09).
     fn init_upload(
         &self,
         token: &str,
         recording_id: &str,
         tracks: &[TrackEntry],
+        annotations: &AnnotationsExport,
     ) -> Result<(), TransportError>;
 
     /// Передать часть `(track_id, part_index)` (идемпотентно: повтор безопасен —
@@ -184,12 +186,13 @@ impl UploadTransport for HttpTransport {
         token: &str,
         recording_id: &str,
         tracks: &[TrackEntry],
+        annotations: &AnnotationsExport,
     ) -> Result<(), TransportError> {
         let resp = self
             .client
             .post(self.url(&format!("audio/recordings/{recording_id}/upload/init/")))
             .bearer_auth(token)
-            .json(&serde_json::json!({ "tracks": tracks }))
+            .json(&serde_json::json!({ "tracks": tracks, "annotations": annotations }))
             .send()
             .map_err(classify_send)?;
         check_status(resp).map(|_| ())

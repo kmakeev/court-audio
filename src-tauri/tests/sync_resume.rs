@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use court_audio_lib::integrity::events::{EventKind, RecordingEvent};
 use court_audio_lib::integrity::hash;
 use court_audio_lib::settings::{RetentionMode, Settings};
-use court_audio_lib::store::export::TrackEntry;
+use court_audio_lib::store::export::{AnnotationsExport, TrackEntry};
 use court_audio_lib::store::manifest::{
     ManifestStore, SegmentRecord, SessionRecord, SessionStatus, UploadStatus,
 };
@@ -55,6 +55,7 @@ impl UploadTransport for FlakyTransport {
         _token: &str,
         _recording_id: &str,
         _tracks: &[TrackEntry],
+        _annotations: &AnnotationsExport,
     ) -> Result<(), TransportError> {
         Ok(())
     }
