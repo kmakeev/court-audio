@@ -894,6 +894,7 @@ pub fn run_consumer(
                     index: seg.index,
                     path: seg.path.to_string_lossy().into_owned(),
                     frames: seg.frames,
+                    started_at_unix_ms: seg.started_at_unix_ms as u64,
                 });
                 journaled += 1;
                 if let Some(mirror) = &rel.mirror {
@@ -945,6 +946,7 @@ pub fn run_consumer(
             index: seg.index,
             path: seg.path.to_string_lossy().into_owned(),
             frames: seg.frames,
+            started_at_unix_ms: seg.started_at_unix_ms as u64,
         });
         if let Some(mirror) = &rel.mirror {
             if let Err(e) = mirror.mirror_segment(seg) {

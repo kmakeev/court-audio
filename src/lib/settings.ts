@@ -102,6 +102,13 @@ export interface MarkersSettings {
   categories: string[];
 }
 
+/** Проигрыватель сессий (этап 10.1). */
+export interface PlayerSettings {
+  seek_step_seconds: number;
+  playback_rates: number[];
+  position_update_hz: number;
+}
+
 export interface Settings {
   audio: AudioSettings;
   recorder: RecorderSettings;
@@ -113,6 +120,7 @@ export interface Settings {
   auth: AuthSettings;
   case_cache: CaseCacheSettings;
   markers: MarkersSettings;
+  player: PlayerSettings;
 }
 
 /** Прочитать настройки (Rust возвращает дефолты из реестра при отсутствии файла). */

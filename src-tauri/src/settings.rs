@@ -501,6 +501,37 @@ fn default_marker_categories() -> Vec<String> {
         .collect()
 }
 
+// ── Проигрыватель (этап 10.1) ────────────────────────────────────────────────
+
+/// `player.*` — встроенный проигрыватель сессий (этап 10.1). Дешифровка
+/// потоковая, в памяти ядра; параметры — только навигация/скорость/частота
+/// события позиции, никаких порогов шифрования (те — в `storage`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerSettings {
+    /// `player.seek_step_seconds` — шаг перемотки кнопками ±N (заседание идёт
+    /// часами: мельче — избыточно кликов, крупнее — грубый промах мимо реплики).
+    pub seek_step_seconds: f32,
+    /// `player.playback_rates` — доступные скорости воспроизведения (0.5–2×,
+    /// стандартный набор аудио/видео-плееров).
+    pub playback_rates: Vec<f32>,
+    /// `player.position_update_hz` — частота события позиции `player_position`
+    /// для UI; ниже `audio.level_update_hz` — плейхеду не нужна живость метра.
+    pub position_update_hz: u32,
+}
+
+impl Default for PlayerSettings {
+    fn default() -> Self {
+        Self {
+            // configuration.md: player.seek_step_seconds = 15.0
+            seek_step_seconds: 15.0,
+            // configuration.md: player.playback_rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+            playback_rates: vec![0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
+            // configuration.md: player.position_update_hz = 5
+            position_update_hz: 5,
+        }
+    }
+}
+
 // ── Корневая модель ───────────────────────────────────────────────────────────
 
 /// Полная схема настроек станции. Сериализуется в JSON (файл конфигурации
@@ -520,6 +551,9 @@ pub struct Settings {
     /// Живая разметка (метки/роли — фаза 2, этап 10). `#[serde(default)]` на корне
     /// уже покрывает отсутствие ключа в конфигах v1/09.
     pub markers: MarkersSettings,
+    /// Проигрыватель сессий (этап 10.1). `#[serde(default)]` на корне уже
+    /// покрывает отсутствие ключа в старых конфигах.
+    pub player: PlayerSettings,
 }
 
 #[cfg(test)]
@@ -562,6 +596,10 @@ mod tests {
             s.markers.categories,
             vec!["Закладка", "Инцидент", "Перерыв", "Прочее"]
         );
+        // Проигрыватель (этап 10.1).
+        assert_eq!(s.player.seek_step_seconds, 15.0);
+        assert_eq!(s.player.playback_rates, vec![0.5, 0.75, 1.0, 1.25, 1.5, 2.0]);
+        assert_eq!(s.player.position_update_hz, 5);
     }
 
     #[test]

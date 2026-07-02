@@ -1,6 +1,6 @@
 // Тестовые фикстуры (синтетика, без реальных ПДн — правило CLAUDE.md).
 import type { Settings } from '../lib/settings';
-import type { DiagnosticsInfo, SessionView } from '../lib/core';
+import type { DiagnosticsInfo, PlayerSessionInfo, SessionView } from '../lib/core';
 
 /** Полный объект `Settings` с валидными значениями (зеркало реестра-дефолтов). */
 export function settingsFixture(): Settings {
@@ -57,6 +57,11 @@ export function settingsFixture(): Settings {
     markers: {
       categories: ['Закладка', 'Инцидент', 'Перерыв', 'Прочее'],
     },
+    player: {
+      seek_step_seconds: 15,
+      playback_rates: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
+      position_update_hz: 5,
+    },
   };
 }
 
@@ -82,6 +87,45 @@ export function sessionViewFixture(over: Partial<SessionView> = {}): SessionView
     duration_seconds: 125,
     upload_total_parts: 0,
     upload_sent_parts: 0,
+    ...over,
+  };
+}
+
+/** Ответ `player_open_session` (этап 10.1) с одной меткой и одним интервалом роли. */
+export function playerSessionInfoFixture(
+  over: Partial<PlayerSessionInfo> = {},
+): PlayerSessionInfo {
+  return {
+    session_id: 'session-1700000000000',
+    started_at_unix_ms: 1_700_000_000_000,
+    adjudication_ref: '№ 1-123/2026, Иванов И.И.',
+    tracks: [{ track_id: 0, role: 'single', label: 'Запись' }],
+    markers: [
+      {
+        id: 'm1',
+        category: 'Инцидент',
+        comment: 'шум в зале',
+        offset_samples: 44_100,
+        offset_ms: 1_000,
+        operator_id: 'op-1',
+        at_unix_ms: 1_700_000_001_000,
+      },
+    ],
+    role_spans: [
+      {
+        id: 'r1',
+        role: 'judge',
+        start_offset_samples: 88_200,
+        start_offset_ms: 2_000,
+        end_offset_samples: 132_300,
+        end_offset_ms: 3_000,
+        operator_id: 'op-1',
+        at_unix_ms: 1_700_000_002_000,
+      },
+    ],
+    duration_ms: 125_000,
+    sample_rate_hz: 44_100,
+    integrity_ok: true,
     ...over,
   };
 }

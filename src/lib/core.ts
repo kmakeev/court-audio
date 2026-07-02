@@ -156,7 +156,8 @@ export type EventKind =
   | 'device_lost'
   | 'device_back'
   | 'recovered'
-  | 'stopped';
+  | 'stopped'
+  | 'playback_accessed';
 
 export interface SessionRecord {
   id: string;
@@ -314,6 +315,30 @@ export interface AdjudicationRef {
   raw_fio?: string;
 }
 
+/**
+ * Человекочитаемое представление `sessions.adjudication_ref` (хранится JSON-
+ * строкой `AdjudicationRef`, см. `store::case_binding`) — «№ …, ФИО» вместо
+ * сырого JSON. `null`/пусто → `null` (вызывающий сам решает фолбэк-текст).
+ * Нераспознанное значение (легаси/повреждённое) возвращается как есть —
+ * лучше показать что-то, чем упасть.
+ */
+export function formatAdjudicationRef(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<AdjudicationRef>;
+    if (parsed && typeof parsed === 'object') {
+      const parts = [parsed.raw_number, parsed.raw_fio].filter(
+        (v): v is string => typeof v === 'string' && v.trim().length > 0,
+      );
+      if (parts.length > 0) return parts.join(', ');
+      if (parsed.adjudication_id) return parsed.adjudication_id;
+    }
+  } catch {
+    // Не JSON (легаси/произвольная строка) — отдаём как есть ниже.
+  }
+  return raw;
+}
+
 /** Дело из кэша докета (store::case_cache::CaseRecord) — минимум полей ПДн. */
 export interface CaseRecord {
   id: string;
@@ -393,6 +418,87 @@ export interface DiagnosticsInfo {
 
 export function getDiagnostics(): Promise<DiagnosticsInfo> {
   return invoke<DiagnosticsInfo>('diagnostics');
+}
+
+// ── Проигрыватель (этап 10.1: ipc::player_cmds) ─────────────────────────────
+
+/** Дорожка сессии в ответе `player_open_session` (список/выбор дорожки). */
+export interface TrackView {
+  track_id: number;
+  role: string;
+  label: string;
+}
+
+/** Выбор источника звука: конкретная дорожка или сведённый микс. */
+export type TrackSelector = { kind: 'track'; track_id: number } | { kind: 'mix' };
+
+/** Цель перемотки: абсолютное время сессии или метка/интервал по `id`. */
+export type SeekTarget = { kind: 'ms'; ms: number } | { kind: 'marker'; id: string };
+
+/** Ответ открытия сессии в проигрывателе (ipc::player_cmds::PlayerSessionInfo). */
+export interface PlayerSessionInfo {
+  session_id: string;
+  started_at_unix_ms: number;
+  adjudication_ref: string | null;
+  tracks: TrackView[];
+  markers: MarkerState[];
+  role_spans: RoleSpanState[];
+  duration_ms: number;
+  sample_rate_hz: number;
+  integrity_ok: boolean;
+}
+
+/** `player_position` — позиция воспроизведения (частота — `player.position_update_hz`). */
+export interface PlayerPositionEvent {
+  position_ms: number;
+  duration_ms: number;
+  state: 'playing' | 'paused' | 'stopped';
+}
+
+/** Открыть сессию `dir` в проигрывателе (реконсиляция + таймлайн + аудит-событие доступа). */
+export function openPlaybackSession(dir: string): Promise<PlayerSessionInfo> {
+  return invoke<PlayerSessionInfo>('player_open_session', { dir });
+}
+
+/** Выбрать источник звука (дорожку или микс); сбрасывает позицию на 0. */
+export function selectPlaybackTrack(selector: TrackSelector): Promise<void> {
+  return invoke('player_select_track', { selector });
+}
+
+/** Начать/возобновить воспроизведение с текущей позиции. */
+export function playbackPlay(): Promise<void> {
+  return invoke('player_play');
+}
+
+/** Приостановить воспроизведение (позиция сохраняется). */
+export function playbackPause(): Promise<void> {
+  return invoke('player_pause');
+}
+
+/** Перемотать к времени сессии или к метке/интервалу по `id`. */
+export function playbackSeek(to: SeekTarget): Promise<void> {
+  return invoke('player_seek', { to });
+}
+
+/** Установить скорость воспроизведения (валидируется по `player.playback_rates`). */
+export function setPlaybackRate(rate: number): Promise<void> {
+  return invoke('player_set_rate', { rate });
+}
+
+/** Установить громкость (`0.0..=1.0`). */
+export function setPlaybackVolume(volume: number): Promise<void> {
+  return invoke('player_set_volume', { volume });
+}
+
+/** Закрыть сессию в проигрывателе (уход с экрана) — освобождает устройство вывода. */
+export function closePlaybackSession(): Promise<void> {
+  return invoke('player_close');
+}
+
+export function onPlayerPosition(
+  cb: (e: PlayerPositionEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<PlayerPositionEvent>('player_position', (ev) => cb(ev.payload));
 }
 
 // ── Типизированные подписки на события ───────────────────────────────────────

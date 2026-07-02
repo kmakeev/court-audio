@@ -162,7 +162,7 @@ fn reconcile_track_segments(
                     track_id,
                     index: seg.index,
                     path: path.to_string_lossy().into_owned(),
-                    started_at_unix_ms: 0, // журнал не хранит таймкод сегмента (этап 02)
+                    started_at_unix_ms: seg.started_at_unix_ms,
                     frames: seg.frames,
                     size_bytes,
                     sha256,
@@ -308,6 +308,7 @@ mod tests {
                     index,
                     path: file_name.clone(),
                     frames,
+                    started_at_unix_ms: 1_700_000_000_000 + (index as u64 - 1) * 30_000,
                 })
                 .unwrap();
             files.push(file_name);
@@ -316,6 +317,23 @@ mod tests {
             journal.append(&JournalRecord::Stopped).unwrap();
         }
         (dir, files)
+    }
+
+    #[test]
+    fn reconcile_persists_real_segment_start_time() {
+        // Регрессия этапа 10.1: раньше started_at_unix_ms сегмента жёстко
+        // писался как 0 (журнал терял реальный таймкод). Плееру нужен
+        // настоящий wall-clock старта сегмента, чтобы сик к метке был точен
+        // сквозь паузы записи (offset метки — от wall-clock, не от оси фреймов).
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, _files) = build_session_dir(tmp.path(), "sess-1", true);
+        let store = ManifestStore::in_memory().unwrap();
+        reconcile_session(&store, &dir).unwrap();
+
+        let segs = store.get_segments("sess-1").unwrap();
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].started_at_unix_ms, 1_700_000_000_000);
+        assert_eq!(segs[1].started_at_unix_ms, 1_700_000_030_000);
     }
 
     #[test]
@@ -395,6 +413,7 @@ mod tests {
                     index,
                     path: file_name,
                     frames,
+                    started_at_unix_ms: 1_700_000_000_000 + (index as u64 - 1) * 30_000,
                 })
                 .unwrap();
             }
@@ -563,6 +582,7 @@ mod tests {
                 index: 3,
                 path: name3,
                 frames: frames3,
+                started_at_unix_ms: 1_700_000_060_000,
             })
             .unwrap();
 

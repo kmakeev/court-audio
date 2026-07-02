@@ -7,6 +7,7 @@
 pub mod audio;
 pub mod integrity;
 pub mod ipc;
+pub mod player;
 pub mod recorder;
 pub mod reliability;
 pub mod settings;
@@ -19,6 +20,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ipc::audio_cmds::CaptureState::default())
         .manage(ipc::audio_cmds::MonitorState::default())
+        .manage(ipc::player_cmds::PlayerState::default())
         .setup(|app| {
             // Фоновый агент выгрузки (этап 06): низкоприоритетный поток, не на
             // горячем пути захвата. Idle, пока не задан sync.server_base_url.
@@ -53,7 +55,15 @@ pub fn run() {
             ipc::marker_cmds::remove_marker,
             ipc::marker_cmds::start_role_span,
             ipc::marker_cmds::end_role_span,
-            ipc::marker_cmds::list_annotations
+            ipc::marker_cmds::list_annotations,
+            ipc::player_cmds::player_open_session,
+            ipc::player_cmds::player_select_track,
+            ipc::player_cmds::player_play,
+            ipc::player_cmds::player_pause,
+            ipc::player_cmds::player_seek,
+            ipc::player_cmds::player_set_rate,
+            ipc::player_cmds::player_set_volume,
+            ipc::player_cmds::player_close
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска приложения «Аудиопротокол»");

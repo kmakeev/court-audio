@@ -45,6 +45,9 @@ pub enum EventKind {
     Recovered,
     /// Корректное завершение сессии.
     Stopped,
+    /// Сессия открыта в проигрывателе (этап 10.1) — доступ к ПДн, фиксируем
+    /// кто/когда/какая сессия (`detail.operator_id`).
+    PlaybackAccessed,
 }
 
 impl EventKind {
@@ -60,6 +63,7 @@ impl EventKind {
             EventKind::DeviceBack => "device_back",
             EventKind::Recovered => "recovered",
             EventKind::Stopped => "stopped",
+            EventKind::PlaybackAccessed => "playback_accessed",
         }
     }
 
@@ -74,6 +78,7 @@ impl EventKind {
             "device_back" => EventKind::DeviceBack,
             "recovered" => EventKind::Recovered,
             "stopped" => EventKind::Stopped,
+            "playback_accessed" => EventKind::PlaybackAccessed,
             _ => return None,
         };
         Some(kind)
@@ -138,6 +143,7 @@ mod tests {
             EventKind::DeviceBack,
             EventKind::Recovered,
             EventKind::Stopped,
+            EventKind::PlaybackAccessed,
         ] {
             assert_eq!(EventKind::from_code(kind.as_code()), Some(kind));
         }

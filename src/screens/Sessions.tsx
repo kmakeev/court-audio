@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BlockHead, Button, Card, EmptyState, Skeleton, Tag } from '../design';
 import {
+  formatAdjudicationRef,
   listSessions,
   pauseUpload,
   resumeUpload,
@@ -71,7 +73,13 @@ type Load =
   | { kind: 'ready'; sessions: SessionView[] }
   | { kind: 'error'; message: string };
 
+/** Доступно ли прослушивание (этап 10.1): завершённая, не удалённая локально сессия. */
+function canListen(s: SessionView): boolean {
+  return s.status !== 'recording' && s.status !== 'purged';
+}
+
 export function SessionsScreen() {
+  const navigate = useNavigate();
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -155,7 +163,7 @@ export function SessionsScreen() {
                       color: 'var(--ink)',
                     }}
                   >
-                    {s.adjudication_ref ?? 'Без привязки к делу'}
+                    {formatAdjudicationRef(s.adjudication_ref) ?? 'Без привязки к делу'}
                   </div>
                   <div
                     className="num"
@@ -166,6 +174,14 @@ export function SessionsScreen() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  {canListen(s) && (
+                    <Button
+                      variant="mini"
+                      onClick={() => navigate(`/sessions/${encodeURIComponent(s.dir)}/listen`)}
+                    >
+                      Прослушать
+                    </Button>
+                  )}
                   {actions.canRetry && (
                     <Button
                       variant="mini"

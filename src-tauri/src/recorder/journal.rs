@@ -41,11 +41,15 @@ pub enum JournalRecord {
         path: String,
         started_at_unix_ms: u64,
     },
-    /// Сегмент финализирован (известна длина в кадрах).
+    /// Сегмент финализирован (известна длина в кадрах). `started_at_unix_ms` —
+    /// реальное время открытия сегмента (этап 10.1: нужно плееру, чтобы
+    /// сопоставлять wall-clock меток с осью фреймов сквозь паузы записи, во
+    /// время которых семплы не пишутся).
     SegmentCompleted {
         index: u32,
         path: String,
         frames: u64,
+        started_at_unix_ms: u64,
     },
     /// Пауза (с причиной — operator/device_lost).
     Paused { reason: String },
@@ -136,6 +140,7 @@ pub struct CompletedSegment {
     pub index: u32,
     pub path: String,
     pub frames: u64,
+    pub started_at_unix_ms: u64,
 }
 
 impl ReplayState {
@@ -190,10 +195,12 @@ pub fn replay(path: &Path) -> std::io::Result<ReplayState> {
                 index,
                 path,
                 frames,
+                started_at_unix_ms,
             } => state.completed_segments.push(CompletedSegment {
                 index,
                 path,
                 frames,
+                started_at_unix_ms,
             }),
             JournalRecord::Recovered => state.recovered = true,
             JournalRecord::Stopped => state.stopped = true,
@@ -237,12 +244,14 @@ mod tests {
             index: 1,
             path: "seg-0001.wav".into(),
             frames: 8_000,
+            started_at_unix_ms: 1_700_000_000_000,
         })
         .unwrap();
         j.append(&JournalRecord::SegmentCompleted {
             index: 2,
             path: "seg-0002.wav".into(),
             frames: 4_000,
+            started_at_unix_ms: 1_700_000_030_000,
         })
         .unwrap();
         j.append(&JournalRecord::Stopped).unwrap();
@@ -251,6 +260,7 @@ mod tests {
         assert_eq!(state.started.as_ref().unwrap().sample_rate_hz, 44_100);
         assert_eq!(state.completed_segments.len(), 2);
         assert_eq!(state.completed_segments[1].frames, 4_000);
+        assert_eq!(state.completed_segments[1].started_at_unix_ms, 1_700_000_030_000);
         assert!(state.stopped);
         assert!(!state.is_unfinished());
     }
@@ -264,6 +274,7 @@ mod tests {
             index: 1,
             path: "seg-0001.wav".into(),
             frames: 8_000,
+            started_at_unix_ms: 1_700_000_000_000,
         })
         .unwrap();
         // Нет записи Stopped — сессия незавершённая.

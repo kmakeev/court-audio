@@ -623,7 +623,9 @@ fn now_unix_ms() -> u64 {
 
 /// Автор разметки: до экрана входа оператора — из env (тот же seam, что у
 /// выгрузки, см. [`crate::sync::OPERATOR_ID_ENV`]); пусто, если не задан.
-fn operator_identity() -> String {
+/// `pub(crate)` — переиспользуется плеером (`ipc::player_cmds`) для аудита
+/// доступа (этап 10.1).
+pub(crate) fn operator_identity() -> String {
     std::env::var(crate::sync::OPERATOR_ID_ENV)
         .ok()
         .filter(|v| !v.is_empty())

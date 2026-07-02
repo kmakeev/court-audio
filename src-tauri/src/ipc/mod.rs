@@ -14,6 +14,7 @@ use crate::settings::Settings;
 pub mod audio_cmds;
 pub mod case_cmds;
 pub mod marker_cmds;
+pub mod player_cmds;
 pub mod query_cmds;
 pub mod sync_cmds;
 

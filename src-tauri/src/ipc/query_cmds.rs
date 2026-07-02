@@ -260,6 +260,7 @@ mod tests {
                 index: 1,
                 path: file_name,
                 frames: segs[0].frames,
+                started_at_unix_ms: segs[0].started_at_unix_ms as u64,
             })
             .unwrap();
         if stopped {
