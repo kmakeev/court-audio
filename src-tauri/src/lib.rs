@@ -5,6 +5,7 @@
 //! каркас, модель [`settings::Settings`] и IPC-команды настроек.
 
 pub mod audio;
+pub mod export;
 pub mod integrity;
 pub mod ipc;
 pub mod player;
@@ -63,7 +64,11 @@ pub fn run() {
             ipc::player_cmds::player_seek,
             ipc::player_cmds::player_set_rate,
             ipc::player_cmds::player_set_volume,
-            ipc::player_cmds::player_close
+            ipc::player_cmds::player_close,
+            ipc::export_cmds::export_session_info,
+            ipc::export_cmds::export_build_package,
+            ipc::export_cmds::export_dvd_drive_status,
+            ipc::export_cmds::export_burn_dvd
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска приложения «Аудиопротокол»");

@@ -182,6 +182,14 @@ export function SessionsScreen() {
                       Прослушать
                     </Button>
                   )}
+                  {canListen(s) && (
+                    <Button
+                      variant="mini"
+                      onClick={() => navigate(`/sessions/${encodeURIComponent(s.dir)}/export`)}
+                    >
+                      Экспортировать
+                    </Button>
+                  )}
                   {actions.canRetry && (
                     <Button
                       variant="mini"

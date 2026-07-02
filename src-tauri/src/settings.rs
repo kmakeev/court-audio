@@ -532,6 +532,49 @@ impl Default for PlayerSettings {
     }
 }
 
+// ── Экспорт (этап 10.2) ───────────────────────────────────────────────────────
+
+/// Политика администратора для экспорта (`10.4`): единый параметр вместо
+/// связки `enabled`+`require_confirmation` из кандидатов промта — исключает
+/// противоречивую комбинацию и 1:1 ложится на трёхвариантный критерий
+/// приёмки («экспорт разрешён/запрещён/только с подтверждением»).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportPolicy {
+    Allowed,
+    Forbidden,
+    RequiresConfirmation,
+}
+
+/// Формат аудио в экспортном пакете (не путать с `MasterCodec`/`ArchiveCodec` —
+/// это выбор оператора в мастере экспорта, не параметр захвата/архива).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportCodec {
+    WavPcm,
+    Flac,
+}
+
+/// `export.*` — мастер экспорта записей (этап 10.2): состав/формат/назначение
+/// пакета копии; сама сборка (дешифровка/склейка/FLAC/HTML-плеер/DVD) — без
+/// параметров реестра (крипто- и Joliet-константы, не бизнес-логика).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportSettings {
+    pub policy: ExportPolicy,
+    pub default_codec: ExportCodec,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self {
+            // configuration.md: export.policy = allowed
+            policy: ExportPolicy::Allowed,
+            // configuration.md: export.default_codec = wav_pcm
+            default_codec: ExportCodec::WavPcm,
+        }
+    }
+}
+
 // ── Корневая модель ───────────────────────────────────────────────────────────
 
 /// Полная схема настроек станции. Сериализуется в JSON (файл конфигурации
@@ -554,6 +597,9 @@ pub struct Settings {
     /// Проигрыватель сессий (этап 10.1). `#[serde(default)]` на корне уже
     /// покрывает отсутствие ключа в старых конфигах.
     pub player: PlayerSettings,
+    /// Мастер экспорта записей (этап 10.2). `#[serde(default)]` на корне уже
+    /// покрывает отсутствие ключа в старых конфигах.
+    pub export: ExportSettings,
 }
 
 #[cfg(test)]
@@ -600,6 +646,30 @@ mod tests {
         assert_eq!(s.player.seek_step_seconds, 15.0);
         assert_eq!(s.player.playback_rates, vec![0.5, 0.75, 1.0, 1.25, 1.5, 2.0]);
         assert_eq!(s.player.position_update_hz, 5);
+        // Экспорт (этап 10.2).
+        assert_eq!(s.export.policy, ExportPolicy::Allowed);
+        assert_eq!(s.export.default_codec, ExportCodec::WavPcm);
+    }
+
+    #[test]
+    fn v1_json_without_export_key_loads_with_defaults() {
+        // Конфиг до этапа 10.2 не содержит ключа `export`: должен грузиться и
+        // получать дефолты реестра (аддитивность через `#[serde(default)]`).
+        let back: Settings = serde_json::from_str("{}").expect("deserialize empty");
+        assert_eq!(back.export, ExportSettings::default());
+    }
+
+    #[test]
+    fn export_policy_and_codec_serialize_snake_case() {
+        let s = ExportSettings {
+            policy: ExportPolicy::RequiresConfirmation,
+            default_codec: ExportCodec::Flac,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"policy\":\"requires_confirmation\""));
+        assert!(json.contains("\"default_codec\":\"flac\""));
+        let back: ExportSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
     }
 
     #[test]

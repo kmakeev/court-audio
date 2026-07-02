@@ -57,9 +57,17 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
 
+# ── Этап 10.2 (export): FLAC-кодирование экспортной копии ─────────────────────
+# Чистый Rust, без libFLAC-биндингов — тот же принцип импортозамещения, что у
+# hound/rusqlite(bundled)/reqwest(rustls-tls).
+flacenc = "0.4"
+
 [dev-dependencies]
 # Временный каталог для интеграционного теста конвейера записи.
 tempfile = "3"
+# Roundtrip-проверка FLAC-энкодера (10.2) в тестах: decode-only, в поставку
+# станции не идёт (только `cargo test`).
+claxon = "0.4"
 
 [features]
 # Параметр по умолчанию для production-сборок Tauri.

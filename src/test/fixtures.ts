@@ -1,6 +1,12 @@
 // Тестовые фикстуры (синтетика, без реальных ПДн — правило CLAUDE.md).
 import type { Settings } from '../lib/settings';
-import type { DiagnosticsInfo, PlayerSessionInfo, SessionView } from '../lib/core';
+import type {
+  DiagnosticsInfo,
+  ExportResult,
+  ExportSessionInfo,
+  PlayerSessionInfo,
+  SessionView,
+} from '../lib/core';
 
 /** Полный объект `Settings` с валидными значениями (зеркало реестра-дефолтов). */
 export function settingsFixture(): Settings {
@@ -61,6 +67,10 @@ export function settingsFixture(): Settings {
       seek_step_seconds: 15,
       playback_rates: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
       position_update_hz: 5,
+    },
+    export: {
+      policy: 'allowed',
+      default_codec: 'wav_pcm',
     },
   };
 }
@@ -126,6 +136,38 @@ export function playerSessionInfoFixture(
     duration_ms: 125_000,
     sample_rate_hz: 44_100,
     integrity_ok: true,
+    ...over,
+  };
+}
+
+/** Ответ `export_session_info` (этап 10.2) — сессия с двумя дорожками. */
+export function exportSessionInfoFixture(
+  over: Partial<ExportSessionInfo> = {},
+): ExportSessionInfo {
+  return {
+    session_id: 'session-1700000000000',
+    adjudication_ref: '№ 1-123/2026, Иванов И.И.',
+    started_at_unix_ms: 1_700_000_000_000,
+    duration_ms: 125_000,
+    tracks: [
+      { track_id: 0, role: 'judge', label: 'Судья' },
+      { track_id: 1, role: 'defense', label: 'Защита' },
+    ],
+    integrity_ok: true,
+    ...over,
+  };
+}
+
+/** Ответ `export_build_package` (этап 10.2). */
+export function exportResultFixture(over: Partial<ExportResult> = {}): ExportResult {
+  return {
+    package_dir: '/data/export/1-123_2026_2026-07-02',
+    files: [
+      { name: 'audio/sudya.wav', sha256: 'a'.repeat(64), size_bytes: 123_456 },
+      { name: 'audio/zaschita.wav', sha256: 'b'.repeat(64), size_bytes: 111_222 },
+    ],
+    manifest_path: '/data/export/1-123_2026_2026-07-02/manifest.json',
+    player_path: '/data/export/1-123_2026_2026-07-02/player.html',
     ...over,
   };
 }

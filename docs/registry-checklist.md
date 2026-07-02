@@ -19,6 +19,7 @@
 | Сеть/TLS | `reqwest` + **rustls** (без OpenSSL) | ✅ Свободно; системный OpenSSL для нашего TLS не нужен |
 | Хранилище | `rusqlite` (SQLite, `bundled`) | ✅ Public Domain (SQLite), свой бинарь |
 | Крипто at-rest | `aes-gcm`, `argon2`, `sha2` (RustCrypto) | ✅ Свободно (MIT/Apache) |
+| Экспорт FLAC (`10.2`) | `flacenc` — чистый Rust, без libFLAC-биндингов | ✅ Свободно (Apache-2.0), свой бинарь |
 | ASR/NER/протокол | **не в этом модуле** — в `ex_system` (W2.11) | ✅ Вне границы модуля |
 
 > **WebView2 (Windows):** проприетарный рантайм Microsoft. Для целевого
@@ -48,6 +49,7 @@
 | serde / serde_json | MIT / Apache-2.0 |
 | cpal | Apache-2.0 |
 | hound (WAV) | Apache-2.0 / MIT |
+| flacenc (FLAC-энкодер, этап 10.2) | Apache-2.0 |
 | rusqlite (SQLite bundled) | MIT (SQLite — Public Domain) |
 | sha2 / aes-gcm / argon2 (RustCrypto) | MIT / Apache-2.0 |
 | rand | MIT / Apache-2.0 |

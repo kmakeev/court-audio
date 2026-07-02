@@ -48,6 +48,10 @@ pub enum EventKind {
     /// Сессия открыта в проигрывателе (этап 10.1) — доступ к ПДн, фиксируем
     /// кто/когда/какая сессия (`detail.operator_id`).
     PlaybackAccessed,
+    /// Экспортный пакет собран или отклонён политикой администратора (этап
+    /// 10.2) — ПДн покидают зашифрованное хранилище, фиксируем всегда:
+    /// `detail.result` ∈ `"ok"`/`"denied"`.
+    ExportCreated,
 }
 
 impl EventKind {
@@ -64,6 +68,7 @@ impl EventKind {
             EventKind::Recovered => "recovered",
             EventKind::Stopped => "stopped",
             EventKind::PlaybackAccessed => "playback_accessed",
+            EventKind::ExportCreated => "export_created",
         }
     }
 
@@ -79,6 +84,7 @@ impl EventKind {
             "recovered" => EventKind::Recovered,
             "stopped" => EventKind::Stopped,
             "playback_accessed" => EventKind::PlaybackAccessed,
+            "export_created" => EventKind::ExportCreated,
             _ => return None,
         };
         Some(kind)
@@ -144,6 +150,7 @@ mod tests {
             EventKind::Recovered,
             EventKind::Stopped,
             EventKind::PlaybackAccessed,
+            EventKind::ExportCreated,
         ] {
             assert_eq!(EventKind::from_code(kind.as_code()), Some(kind));
         }

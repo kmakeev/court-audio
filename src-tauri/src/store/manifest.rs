@@ -366,6 +366,30 @@ impl ManifestStore {
         Ok(out)
     }
 
+    /// Дорожки сессии с учётом легаси-совместимости: если явных дорожек нет
+    /// (сессия, наполненная до многоканала, либо тесты без явных дорожек),
+    /// синтезируется одна дорожка `track_id = 0`, роль [`SINGLE_TRACK_ROLE`].
+    /// Общий помощник для `store::export::build_manifest`,
+    /// `ipc::player_cmds::player_open_session` и `export::package` — вместо
+    /// дублирования одной и той же развилки в трёх местах.
+    pub fn resolve_tracks(&self, session_id: &str) -> Result<Vec<TrackRecord>, StoreError> {
+        let tracks = self.get_tracks(session_id)?;
+        if !tracks.is_empty() {
+            return Ok(tracks);
+        }
+        let session = self
+            .get_session(session_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("сессия {session_id}")))?;
+        Ok(vec![TrackRecord {
+            track_id: 0,
+            role: crate::audio::tracks::SINGLE_TRACK_ROLE.to_string(),
+            label: String::new(),
+            source_device: None,
+            source_channel: 0,
+            final_chain_link: session.final_chain_link,
+        }])
+    }
+
     /// Сегменты одной дорожки в порядке индекса.
     pub fn get_track_segments(
         &self,

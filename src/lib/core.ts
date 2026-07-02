@@ -501,6 +501,113 @@ export function onPlayerPosition(
   return listen<PlayerPositionEvent>('player_position', (ev) => cb(ev.payload));
 }
 
+// ── Экспорт (этап 10.2: ipc::export_cmds) ────────────────────────────────────
+
+/** Дорожка сессии для шага «Состав» мастера экспорта. */
+export interface ExportTrackView {
+  track_id: number;
+  role: string;
+  label: string;
+}
+
+/** Ответ `export_session_info`. */
+export interface ExportSessionInfo {
+  session_id: string;
+  adjudication_ref: string | null;
+  started_at_unix_ms: number;
+  duration_ms: number;
+  tracks: ExportTrackView[];
+  integrity_ok: boolean;
+}
+
+/** Состав пакета, выбранный оператором в мастере. */
+export type ExportComposition =
+  | { kind: 'all_tracks' }
+  | { kind: 'mix' }
+  | { kind: 'track'; track_id: number };
+
+/** Формат аудиофайлов пакета. */
+export type ExportFormat = 'wav_pcm' | 'flac';
+
+/** Один файл в ответе сборки пакета. */
+export interface ExportFileView {
+  name: string;
+  sha256: string;
+  size_bytes: number;
+}
+
+/** Ответ `export_build_package`. */
+export interface ExportResult {
+  package_dir: string;
+  files: ExportFileView[];
+  manifest_path: string;
+  player_path: string;
+}
+
+/** Найденный привод DVD (шаг «Назначение»). */
+export interface DvdDriveView {
+  id: string;
+  label: string;
+}
+
+/** Итог прожига DVD. */
+export interface DvdBurnResultView {
+  verified: boolean;
+  drive: string;
+}
+
+/** Прогресс сборки пакета — событие `export_progress`. */
+export interface ExportProgressEvent {
+  stage: string;
+  percent: number;
+}
+
+/** Инфо для шага «Состав» мастера (без побочных эффектов/аудита). */
+export function exportSessionInfo(dir: string): Promise<ExportSessionInfo> {
+  return invoke<ExportSessionInfo>('export_session_info', { dir });
+}
+
+/**
+ * Собрать экспортный пакет. `destinationDir: null` — временный каталог
+ * станции для последующего прожига DVD (`exportBurnDvd`). `confirmed` —
+ * подтверждение оператора для политики `requires_confirmation`.
+ */
+export function exportBuildPackage(
+  dir: string,
+  composition: ExportComposition,
+  format: ExportFormat,
+  destinationDir: string | null,
+  confirmed: boolean,
+): Promise<ExportResult> {
+  return invoke<ExportResult>('export_build_package', {
+    dir,
+    composition,
+    format,
+    destinationDir,
+    confirmed,
+  });
+}
+
+/** Найти привод/утилиту прожига DVD (`null` — недоступно на этой станции). */
+export function exportDvdDriveStatus(): Promise<DvdDriveView | null> {
+  return invoke<DvdDriveView | null>('export_dvd_drive_status');
+}
+
+/** Прожечь уже собранный пакет на DVD и верифицировать хешами. */
+export function exportBurnDvd(
+  dir: string,
+  packageDir: string,
+  driveId: string,
+): Promise<DvdBurnResultView> {
+  return invoke<DvdBurnResultView>('export_burn_dvd', { dir, packageDir, driveId });
+}
+
+export function onExportProgress(
+  cb: (e: ExportProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<ExportProgressEvent>('export_progress', (ev) => cb(ev.payload));
+}
+
 // ── Типизированные подписки на события ───────────────────────────────────────
 
 export function onAudioLevel(cb: (e: LevelEvent) => void): Promise<UnlistenFn> {

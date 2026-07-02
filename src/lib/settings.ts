@@ -109,6 +109,16 @@ export interface PlayerSettings {
   position_update_hz: number;
 }
 
+/** Политика администратора для экспорта (этап 10.2). */
+export type ExportPolicy = 'allowed' | 'forbidden' | 'requires_confirmation';
+export type ExportCodec = 'wav_pcm' | 'flac';
+
+/** Мастер экспорта записей (этап 10.2). */
+export interface ExportSettings {
+  policy: ExportPolicy;
+  default_codec: ExportCodec;
+}
+
 export interface Settings {
   audio: AudioSettings;
   recorder: RecorderSettings;
@@ -121,6 +131,7 @@ export interface Settings {
   case_cache: CaseCacheSettings;
   markers: MarkersSettings;
   player: PlayerSettings;
+  export: ExportSettings;
 }
 
 /** Прочитать настройки (Rust возвращает дефолты из реестра при отсутствии файла). */

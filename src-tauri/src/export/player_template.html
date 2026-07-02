@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Аудиопротокол — копия записи</title>
+<style>
+  :root {
+    --paper: #f4ede0; --paper-soft: #ede4d2; --paper-strong: #e4d8bf; --paper-elev: #faf6ec;
+    --ink: #1a1814; --ink-soft: #2c2922; --body: #44403a; --muted: #645e53;
+    --hairline: #d6cab1;
+    --accent: #8a2a2a; --accent-deep: #5e1c1c; --accent-soft: #b65555; --accent-tint: #efd9d4;
+    --gold: #a4842b; --gold-tint: #ecdfb4; --green: #4a6b3a;
+    --serif: Georgia, "Source Serif Pro", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--paper); color: var(--body);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+  .card { background: var(--paper-elev); border: 1px solid var(--hairline); padding: 20px 24px; }
+  .block-head { margin-bottom: 10px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .block-head .numeral { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .1em; font-weight: 500; width: 18px; flex-shrink: 0; }
+  .block-head h2 { margin: 0; font-family: var(--serif); font-weight: 500; font-size: 22px; color: var(--ink); }
+  .block-head .rule { flex: 1; border-top: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); height: 4px; margin-left: 8px; align-self: flex-end; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 2px; padding-left: 32px; }
+  .num { font-family: var(--mono); }
+  .tag { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 2px; font-size: 12px; font-weight: 500; border: 1px solid var(--hairline); background: var(--paper-strong); color: var(--ink-soft); }
+  .tag.accent { background: var(--accent-tint); color: var(--accent-deep); border-color: var(--accent-soft); }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; border: 1px solid var(--ink-soft); background: transparent; color: var(--ink); height: 38px; padding: 0 16px; font-size: 13px; font-weight: 500; font-family: var(--sans); }
+  .btn.primary { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+  /* Фиксированная минимальная ширина play/pause — иначе переключение между
+     «Играть»/«Пауза» (разная длина текста) сдвигает соседние элементы ряда.
+     Высота — как у остальных кнопок ряда (не выше), задаётся общим `.btn`. */
+  #play-btn { min-width: 140px; }
+  input[type=range] { font-family: var(--sans); }
+  /* Свой выпадающий список вместо `<select>`: нативный `<option>`-попап
+     рисуется ОС и не поддаётся CSS-стилизации ни в одном браузере — чтобы
+     открытый список тоже был в стиле страницы (не системная тема), это
+     кнопка-триггер + `<ul>` поверх остального контента, как у Select
+     дизайн-системы в самом приложении. */
+  .dropdown { position: relative; display: inline-block; }
+  .dropdown-trigger {
+    appearance: none; background: var(--paper-elev); border: 1px solid var(--hairline);
+    color: var(--ink); font-family: var(--sans); font-size: 14px; text-align: left;
+    padding: 9px 32px 9px 12px; height: 38px; min-width: 90px; cursor: pointer; position: relative;
+  }
+  .dropdown-trigger:focus { outline: 2px solid var(--accent-soft); outline-offset: 1px; }
+  .dropdown-trigger::after {
+    content: ''; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px;
+    border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+    transform: translateY(-65%) rotate(45deg); pointer-events: none;
+  }
+  .dropdown-list {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; min-width: 100%;
+    margin: 0; padding: 4px 0; list-style: none; background: var(--paper-elev);
+    border: 1px solid var(--hairline); box-shadow: 0 10px 28px rgba(26, 24, 20, 0.18);
+    max-height: 240px; overflow-y: auto;
+  }
+  .dropdown-option { padding: 8px 14px; cursor: pointer; font-size: 14px; color: var(--body); white-space: nowrap; }
+  .dropdown-option:hover { background: var(--paper-strong); }
+  .dropdown-option.selected { color: var(--ink); font-weight: 500; background: var(--paper-soft); }
+  .scrubber { width: 100%; accent-color: var(--accent); display: block; }
+  .markers-overlay { position: relative; height: 10px; margin-top: 4px; }
+  .marker-tick { position: absolute; top: 0; width: 2px; height: 10px; background: var(--accent); }
+  .role-bar { position: absolute; top: 0; height: 6px; background: var(--gold-tint); border: 1px solid var(--gold); }
+  ul.toc { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+  ul.toc li button { display: flex; align-items: center; gap: 10px; width: 100%; background: transparent; border: none; border-bottom: 1px solid var(--hairline); padding: 6px 0; cursor: pointer; text-align: left; font-family: var(--sans); font-size: 13px; color: var(--body); }
+  ul.toc li button.current { background: var(--paper-strong); }
+  ul.toc li button .num { color: var(--ink); font-size: 12px; width: 64px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="block-head">
+      <span class="numeral">&#9654;</span>
+      <h2>Прослушивание копии</h2>
+      <span class="rule"></span>
+    </div>
+    <div class="hint" id="case-hint"></div>
+    <div class="row" style="margin-top:10px">
+      <span class="tag" id="date-tag"></span>
+      <span class="tag" id="integrity-note">Целостность: сверьте SHA-256 файла (поле «sha256» в manifest.json) с хешем, посчитанным на своём компьютере — «shasum -a 256 файл» (macOS/Linux) или «certutil -hashfile файл SHA256» (Windows)</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="block-head">
+      <span class="numeral">A</span>
+      <h2>Таймлайн</h2>
+      <span class="rule"></span>
+    </div>
+    <div class="row" style="align-items:center;gap:12px">
+      <span class="num" id="position-label" style="font-size:13px;width:64px;flex-shrink:0">00:00:00</span>
+      <div style="flex:1;min-width:0">
+        <input type="range" class="scrubber" id="scrubber" min="0" max="1000" value="0" aria-label="Позиция воспроизведения" />
+        <div class="markers-overlay" id="markers-overlay" aria-hidden="true"></div>
+      </div>
+      <span class="num" id="duration-label" style="font-size:13px;color:var(--muted);width:64px;flex-shrink:0">00:00:00</span>
+    </div>
+    <p class="hint" id="legend" style="padding-left:76px;margin:4px 0 0 0"></p>
+
+    <div class="row" style="margin-top:20px">
+      <button class="btn primary" id="play-btn" type="button">&#9654; Играть</button>
+      <button class="btn" id="seek-back-btn" type="button"></button>
+      <button class="btn" id="seek-fwd-btn" type="button"></button>
+      <span class="dropdown" id="rate-dropdown"></span>
+      <label class="row" style="gap:6px">
+        <span style="font-size:11px;color:var(--muted)">Громкость</span>
+        <input type="range" id="volume" min="0" max="1" step="0.05" value="1" style="width:90px;accent-color:var(--accent)" aria-label="Громкость" />
+      </label>
+      <span class="dropdown" id="track-dropdown" style="display:none"></span>
+    </div>
+    <p class="hint" style="margin-top:16px;padding-left:0">Горячие клавиши: Пробел — play/pause, стрелки влево/вправо — перемотка, стрелки вверх/вниз — громкость.</p>
+  </div>
+
+  <div class="card">
+    <div class="block-head">
+      <span class="numeral">B</span>
+      <h2 id="toc-title">Оглавление</h2>
+      <span class="rule"></span>
+    </div>
+    <ul class="toc" id="toc"></ul>
+  </div>
+</div>
+
+<audio id="audio" preload="metadata"></audio>
+<script id="export-data" type="application/json">__EXPORT_PLAYER_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var data = JSON.parse(document.getElementById('export-data').textContent);
+  var audio = document.getElementById('audio');
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function formatClock(totalMs) {
+    var totalSec = Math.max(0, Math.floor(totalMs / 1000));
+    var h = Math.floor(totalSec / 3600), m = Math.floor((totalSec % 3600) / 60), s = totalSec % 60;
+    return pad(h) + ':' + pad(m) + ':' + pad(s);
+  }
+  function pct(offsetMs, durationMs) {
+    if (!durationMs) return 0;
+    return Math.max(0, Math.min(100, (offsetMs / durationMs) * 100));
+  }
+
+  function formatAdjudicationRef(raw) {
+    if (!raw) return null;
+    try {
+      var parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        var parts = [parsed.raw_number, parsed.raw_fio].filter(function (v) {
+          return typeof v === 'string' && v.trim().length > 0;
+        });
+        if (parts.length > 0) return parts.join(', ');
+        if (parsed.adjudication_id) return parsed.adjudication_id;
+      }
+    } catch (e) {
+      // Не JSON (легаси/произвольная строка) — отдаём как есть ниже.
+    }
+    return raw;
+  }
+
+  document.getElementById('case-hint').textContent =
+    formatAdjudicationRef(data.adjudication_ref) || 'Без привязки к делу';
+  document.getElementById('date-tag').textContent = new Date(data.started_at_unix_ms).toLocaleString('ru-RU');
+
+  var seekStepMs = Math.round((data.seek_step_seconds || 15) * 1000);
+  var seekLabel = Math.round(seekStepMs / 1000) + ' с';
+  document.getElementById('seek-back-btn').textContent = '<< ' + seekLabel;
+  document.getElementById('seek-fwd-btn').textContent = seekLabel + ' >>';
+
+  // Кастомный выпадающий список: кнопка-триггер (текущее значение) + `<ul>`
+  // поверх остального контента при открытии. closeAllDropdowns закрывает
+  // остальные при открытии нового и по клику вне/Escape.
+  var openDropdowns = [];
+  function closeAllDropdowns(except) {
+    openDropdowns.forEach(function (d) {
+      if (d !== except) d.close();
+    });
+  }
+  document.addEventListener('mousedown', function (e) {
+    openDropdowns.forEach(function (d) {
+      if (!d.root.contains(e.target)) d.close();
+    });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeAllDropdowns(null);
+  });
+
+  function createDropdown(rootId, ariaLabel, items, selectedIndex, onSelect) {
+    var root = document.getElementById(rootId);
+    var trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'dropdown-trigger';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.setAttribute('aria-label', ariaLabel);
+    var list = document.createElement('ul');
+    list.className = 'dropdown-list';
+    list.setAttribute('role', 'listbox');
+    list.hidden = true;
+
+    var selected = selectedIndex;
+
+    function render() {
+      trigger.textContent = items[selected] ? items[selected].label : '';
+      list.innerHTML = '';
+      items.forEach(function (item, i) {
+        var li = document.createElement('li');
+        li.setAttribute('role', 'option');
+        li.setAttribute('aria-selected', i === selected ? 'true' : 'false');
+        li.className = 'dropdown-option' + (i === selected ? ' selected' : '');
+        li.textContent = item.label;
+        li.addEventListener('click', function () {
+          selected = i;
+          render();
+          close();
+          onSelect(item.value, i);
+        });
+        list.appendChild(li);
+      });
+    }
+
+    function open() {
+      closeAllDropdowns(api);
+      list.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+    }
+    function close() {
+      list.hidden = true;
+      trigger.setAttribute('aria-expanded', 'false');
+    }
+
+    trigger.addEventListener('click', function () {
+      if (list.hidden) open(); else close();
+    });
+
+    render();
+    root.appendChild(trigger);
+    root.appendChild(list);
+
+    var api = { root: root, close: close, setSelectedIndex: function (i) { selected = i; render(); } };
+    openDropdowns.push(api);
+    return api;
+  }
+
+  var rateItems = (data.playback_rates && data.playback_rates.length ? data.playback_rates : [1]).map(function (r) {
+    return { value: r, label: r + '×' };
+  });
+  var initialRateIdx = rateItems.findIndex(function (it) { return it.value === 1; });
+  if (initialRateIdx < 0) initialRateIdx = 0;
+  createDropdown('rate-dropdown', 'Скорость воспроизведения', rateItems, initialRateIdx, function (value) {
+    audio.playbackRate = Number(value);
+  });
+
+  var volume = document.getElementById('volume');
+  volume.addEventListener('input', function () {
+    audio.volume = Number(volume.value);
+  });
+
+  var tracks = data.tracks && data.tracks.length ? data.tracks : [];
+  function selectTrack(i) {
+    var wasPlaying = !audio.paused;
+    audio.pause();
+    audio.src = tracks[i].file;
+    audio.currentTime = 0;
+    audio.load();
+    if (wasPlaying) { audio.play().catch(function () {}); }
+  }
+  if (tracks.length > 1) {
+    document.getElementById('track-dropdown').style.display = '';
+    var trackItems = tracks.map(function (t, i) {
+      return { value: i, label: (t.label && t.label.trim()) ? t.label : t.role };
+    });
+    createDropdown('track-dropdown', 'Дорожка', trackItems, 0, function (value) {
+      selectTrack(Number(value));
+    });
+  }
+
+  if (tracks.length > 0) {
+    audio.src = tracks[0].file;
+  }
+
+  var items = []
+    .concat((data.markers || []).map(function (m) { return { kind: 'marker', offsetMs: m.offset_ms, marker: m }; }))
+    .concat((data.role_spans || []).map(function (s) { return { kind: 'role', offsetMs: s.start_offset_ms, span: s }; }))
+    .sort(function (a, b) { return a.offsetMs - b.offsetMs; });
+
+  document.getElementById('toc-title').textContent = 'Оглавление (' + items.length + ')';
+
+  var durationMs = data.duration_ms || 0;
+  var overlay = document.getElementById('markers-overlay');
+  (data.role_spans || []).forEach(function (s) {
+    var endMs = s.end_offset_ms != null ? s.end_offset_ms : durationMs;
+    var left = pct(s.start_offset_ms, durationMs);
+    var width = Math.max(0.5, pct(endMs, durationMs) - left);
+    var bar = document.createElement('span');
+    bar.className = 'role-bar';
+    bar.title = 'Роль: ' + s.role;
+    bar.style.left = left + '%';
+    bar.style.width = width + '%';
+    overlay.appendChild(bar);
+  });
+  (data.markers || []).forEach(function (m) {
+    var tick = document.createElement('span');
+    tick.className = 'marker-tick';
+    tick.title = m.comment ? (m.category + ': ' + m.comment) : m.category;
+    tick.style.left = 'calc(' + pct(m.offset_ms, durationMs) + '% - 1px)';
+    overlay.appendChild(tick);
+  });
+  document.getElementById('legend').textContent = items.length
+    ? '▌ метки · ▬ роли говорящих — см. оглавление ниже'
+    : '';
+
+  var toc = document.getElementById('toc');
+  var itemButtons = [];
+  items.forEach(function (item) {
+    var li = document.createElement('li');
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    var time = document.createElement('span');
+    time.className = 'num';
+    time.textContent = formatClock(item.offsetMs);
+    btn.appendChild(time);
+    if (item.kind === 'marker') {
+      var tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = item.marker.category;
+      btn.appendChild(tag);
+      if (item.marker.comment) {
+        var c = document.createElement('span');
+        c.textContent = item.marker.comment;
+        c.style.color = 'var(--ink-soft)';
+        c.style.fontSize = '12px';
+        btn.appendChild(c);
+      }
+    } else {
+      var rtag = document.createElement('span');
+      rtag.className = 'tag accent';
+      rtag.textContent = item.span.role;
+      btn.appendChild(rtag);
+    }
+    btn.addEventListener('click', function () {
+      seekTo(item.offsetMs);
+      audio.play().catch(function () {});
+    });
+    li.appendChild(btn);
+    toc.appendChild(li);
+    itemButtons.push({ btn: btn, offsetMs: item.offsetMs });
+  });
+  if (items.length === 0) {
+    var empty = document.createElement('p');
+    empty.className = 'hint';
+    empty.style.padding = '0';
+    empty.textContent = 'Меток и интервалов ролей в этой сессии нет.';
+    toc.appendChild(empty);
+  }
+
+  var HIGHLIGHT_EPSILON_MS = 20;
+  function updateHighlight(positionMs) {
+    var currentBtn = null;
+    for (var i = 0; i < itemButtons.length; i++) {
+      if (itemButtons[i].offsetMs > positionMs + HIGHLIGHT_EPSILON_MS) break;
+      currentBtn = itemButtons[i].btn;
+    }
+    itemButtons.forEach(function (ib) {
+      ib.btn.classList.toggle('current', ib.btn === currentBtn);
+    });
+  }
+
+  var scrubber = document.getElementById('scrubber');
+  var positionLabel = document.getElementById('position-label');
+  var durationLabel = document.getElementById('duration-label');
+  durationLabel.textContent = formatClock(durationMs);
+  scrubber.max = String(Math.max(1, durationMs));
+
+  var dragging = false;
+  scrubber.addEventListener('input', function () {
+    dragging = true;
+    positionLabel.textContent = formatClock(Number(scrubber.value));
+  });
+  scrubber.addEventListener('change', function () {
+    seekTo(Number(scrubber.value));
+    dragging = false;
+  });
+
+  function seekTo(ms) {
+    var clamped = Math.max(0, Math.min(durationMs || ms, Math.round(ms)));
+    audio.currentTime = clamped / 1000;
+    positionLabel.textContent = formatClock(clamped);
+    scrubber.value = String(clamped);
+    updateHighlight(clamped);
+  }
+
+  audio.addEventListener('timeupdate', function () {
+    if (dragging) return;
+    var ms = Math.round(audio.currentTime * 1000);
+    positionLabel.textContent = formatClock(ms);
+    scrubber.value = String(ms);
+    updateHighlight(ms);
+  });
+  audio.addEventListener('durationchange', function () {
+    if (audio.duration && isFinite(audio.duration)) {
+      durationMs = Math.round(audio.duration * 1000);
+      durationLabel.textContent = formatClock(durationMs);
+      scrubber.max = String(Math.max(1, durationMs));
+    }
+  });
+
+  var playBtn = document.getElementById('play-btn');
+  function setPlayingUi(playing) {
+    playBtn.textContent = playing ? '❚❚ Пауза' : '▶ Играть';
+    playBtn.classList.toggle('primary', !playing);
+  }
+  playBtn.addEventListener('click', function () {
+    if (audio.paused) { audio.play().catch(function () {}); } else { audio.pause(); }
+  });
+  audio.addEventListener('play', function () { setPlayingUi(true); });
+  audio.addEventListener('pause', function () { setPlayingUi(false); });
+  setPlayingUi(false);
+
+  document.getElementById('seek-back-btn').addEventListener('click', function () {
+    seekTo((audio.currentTime * 1000) - seekStepMs);
+  });
+  document.getElementById('seek-fwd-btn').addEventListener('click', function () {
+    seekTo((audio.currentTime * 1000) + seekStepMs);
+  });
+
+  document.addEventListener('keydown', function (e) {
+    var target = e.target;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+    // Не перехватываем пробел/стрелки, пока фокус на триггере/списке
+    // выпадающего меню — иначе, например, пробел одновременно и открывал бы
+    // список, и переключал play/pause.
+    if (target && target.closest && target.closest('.dropdown')) return;
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (audio.paused) { audio.play().catch(function () {}); } else { audio.pause(); }
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      seekTo((audio.currentTime * 1000) - seekStepMs);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      seekTo((audio.currentTime * 1000) + seekStepMs);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      volume.value = String(Math.min(1, Number(volume.value) + 0.05));
+      audio.volume = Number(volume.value);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      volume.value = String(Math.max(0, Number(volume.value) - 0.05));
+      audio.volume = Number(volume.value);
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 
 use super::manifest::{ManifestStore, SessionStatus, TrackRecord, UploadStatus};
 use super::StoreError;
-use crate::audio::tracks::SINGLE_TRACK_ROLE;
 use crate::integrity::annotations::{self, AnnotationRecord, MarkerState, RoleSpanState};
 use crate::integrity::events::RecordingEvent;
 
@@ -139,25 +138,15 @@ pub fn build_manifest(
         .get_session(session_id)?
         .ok_or_else(|| StoreError::NotFound(format!("сессия {session_id}")))?;
 
-    let track_records = store.get_tracks(session_id)?;
-    let tracks = if track_records.is_empty() {
-        // Легаси/тесты без явных дорожек: единственная дорожка track_id=0.
-        let segments = segment_entries(store, session_id, 0)?;
-        vec![TrackEntry {
-            track_id: 0,
-            role: SINGLE_TRACK_ROLE.to_string(),
-            label: String::new(),
-            final_chain_link: session.final_chain_link.clone(),
-            segments,
-        }]
-    } else {
-        let mut out = Vec::with_capacity(track_records.len());
-        for t in track_records {
-            let segments = segment_entries(store, session_id, t.track_id)?;
-            out.push(track_entry(&t, segments));
-        }
-        out
-    };
+    // Легаси/тесты без явных дорожек: `resolve_tracks` синтезирует одну
+    // дорожку `track_id=0` (роль `SINGLE_TRACK_ROLE`) — общий помощник,
+    // переиспользуемый также `ipc::player_cmds` и `export::package` (10.2).
+    let track_records = store.resolve_tracks(session_id)?;
+    let mut tracks = Vec::with_capacity(track_records.len());
+    for t in &track_records {
+        let segments = segment_entries(store, session_id, t.track_id)?;
+        tracks.push(track_entry(t, segments));
+    }
 
     let events = store
         .get_events(session_id)?
@@ -234,6 +223,7 @@ fn track_entry(t: &TrackRecord, segments: Vec<SegmentEntry>) -> TrackEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::tracks::SINGLE_TRACK_ROLE;
     use crate::integrity::events::EventKind;
     use crate::integrity::hash;
     use crate::store::manifest::{SegmentRecord, SessionRecord};
