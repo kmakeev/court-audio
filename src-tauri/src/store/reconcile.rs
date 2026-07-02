@@ -81,6 +81,15 @@ pub fn reconcile_session(store: &ManifestStore, dir: &Path) -> Result<Option<Str
     rec.sample_rate_hz = meta.sample_rate_hz;
     rec.channels = meta.channels;
     rec.bit_depth = meta.bit_depth;
+    // Идентичность (этап 10.3): журнал — write-ahead источник истины. Проставляем
+    // из `SessionStarted`, когда в записи ещё пусто (не затираем уже известное —
+    // напр. смену оператора/уточнение в UI на будущее).
+    if rec.operator_id.is_empty() && !meta.operator_id.is_empty() {
+        rec.operator_id = meta.operator_id.clone();
+    }
+    if rec.station_id.is_empty() && !meta.station_id.is_empty() {
+        rec.station_id = meta.station_id.clone();
+    }
     rec.status = status;
     store.insert_session(&rec)?;
 
@@ -298,6 +307,8 @@ mod tests {
                 channels: 1,
                 bit_depth: 16,
                 segment_seconds: 30,
+                operator_id: "42".into(),
+                station_id: "station-A".into(),
             })
             .unwrap();
         let mut files = Vec::new();
@@ -348,6 +359,9 @@ mod tests {
         let session = store.get_session("sess-1").unwrap().unwrap();
         assert_eq!(session.status, SessionStatus::Stopped);
         assert_eq!(session.sample_rate_hz, 8_000);
+        // Идентичность (этап 10.3) из журнала `SessionStarted` доехала до манифеста.
+        assert_eq!(session.operator_id, "42");
+        assert_eq!(session.station_id, "station-A");
 
         let segs = store.get_segments("sess-1").unwrap();
         assert_eq!(segs.len(), 2);
@@ -374,6 +388,8 @@ mod tests {
                 channels: 2,
                 bit_depth: 16,
                 segment_seconds: 30,
+                operator_id: String::new(),
+                station_id: String::new(),
             })
             .unwrap();
 
@@ -405,6 +421,8 @@ mod tests {
                 channels: 1,
                 bit_depth: 16,
                 segment_seconds: 30,
+                operator_id: String::new(),
+                station_id: String::new(),
             })
             .unwrap();
             for index in 1..=n {

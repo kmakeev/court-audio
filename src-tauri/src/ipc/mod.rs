@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager};
 use crate::settings::Settings;
 
 pub mod audio_cmds;
+pub mod auth_cmds;
 pub mod case_cmds;
 pub mod export_cmds;
 pub mod marker_cmds;

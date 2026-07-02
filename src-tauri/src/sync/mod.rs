@@ -13,6 +13,7 @@
 //! Все параметры — из [`crate::settings`] (реестр `docs/configuration.md`,
 //! разделы «Выгрузка и сеть», «Аутентификация»); магических чисел нет.
 
+pub mod auth;
 pub mod client;
 pub mod docket;
 pub mod queue;
@@ -28,16 +29,16 @@ use std::time::Duration;
 use crate::store::StoreError;
 use client::{ErrorKind, TransportError};
 
-/// Env-переменная с операторским JWT (транспорт выгрузки). Временный источник
-/// токена до этапа `auth` (как `COURT_AUDIO_STATION_PASSPHRASE` для ключа): не
-/// настройка-тюнинг, а seam идентичности — секрет в settings.json не хранится.
+/// Env-переменная с операторским JWT (транспорт выгрузки). **Только тестовая
+/// подпорка (CI/интеграция):** с этапа 10.3 боевой код токен из env **не читает**
+/// — источник токена — вход оператора ([`auth`] + `ipc::auth_cmds`). Оставлена
+/// для оффлайн-прогонов сети без экрана входа.
 pub const OPERATOR_TOKEN_ENV: &str = "COURT_AUDIO_OPERATOR_TOKEN";
 
-/// Env-переменные идентичности станции/оператора — временный источник до
-/// экрана входа оператора (login-UI). Запись сессии до входа заводится с
-/// пустыми `station_id`/`operator_id` (reconcile), а сервер `07` требует
-/// **числовой** `operator_id` (PK пользователя ex_system). Эти переменные
-/// заполняют пустые значения при регистрации сессии (`upload_session`).
+/// Env-переменные идентичности станции/оператора — **только тестовая подпорка
+/// (CI/интеграция).** Боевой источник `operator_id` — сессия входа оператора
+/// (этап 10.3); `station_id` — учётка станции. Сервер `07` требует **числовой**
+/// `operator_id` (PK пользователя ex_system). В бою — фолбэк `#[cfg(test)]`.
 pub const OPERATOR_ID_ENV: &str = "COURT_AUDIO_OPERATOR_ID";
 pub const STATION_ID_ENV: &str = "COURT_AUDIO_STATION_ID";
 

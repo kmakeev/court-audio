@@ -35,6 +35,7 @@ import {
   type ReliabilityEvent,
 } from '../lib/core';
 import { getSettings, type Settings } from '../lib/settings';
+import { useAuth } from '../lib/auth-context';
 
 // Экран «Запись» (этап 04). UI станции захвата: устройство, живые индикаторы
 // уровня, управление сессией и недвусмысленный статус. Вся логика — в ядре
@@ -88,6 +89,11 @@ const STATUS_TONE: Record<UiState, 'default' | 'accent' | 'gold' | 'green'> = {
 };
 
 export function RecordScreen() {
+  // Гейт входа (этап 10.3): без вошедшего оператора старт новой сессии закрыт
+  // (backend тоже отклонит). `status === null` (вне провайдера/до загрузки) —
+  // не блокируем, чтобы не мешать изолированным сценариям.
+  const { status } = useAuth();
+  const operatorMissing = status !== null && !status.operator;
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [deviceName, setDeviceName] = useState('');
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -586,7 +592,11 @@ export function RecordScreen() {
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {(state === 'idle' || state === 'stopped') && !saving && (
-          <Button variant="primary" onClick={() => void onStart()} disabled={!deviceName}>
+          <Button
+            variant="primary"
+            onClick={() => void onStart()}
+            disabled={!deviceName || operatorMissing}
+          >
             ● Старт записи
           </Button>
         )}

@@ -49,6 +49,8 @@ fn killtest_recovers_unfinished_session() {
             channels: 1,
             bit_depth: 16,
             segment_seconds: 1,
+            operator_id: String::new(),
+            station_id: String::new(),
         })
         .unwrap();
 

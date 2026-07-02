@@ -153,6 +153,9 @@ pub fn start_capture(
     stop_monitor_internal(&monitor)?;
 
     let settings = load_settings(&app)?;
+    // Гейт входа (этап 10.3): при `auth.operator.required_to_start` старт новой
+    // сессии требует вошедшего оператора. Идущую запись это не касается.
+    crate::ipc::auth_cmds::ensure_start_allowed(&app, &settings)?;
     let storage_root = resolve_storage_root(&app, &settings)?;
     let output_dir = session_dir(&storage_root);
     let started_at_unix_ms = now_unix_ms();
@@ -198,6 +201,11 @@ fn start_single(
 ) -> Result<Started, String> {
     let params = build_params(settings, output_dir.to_path_buf());
 
+    // Идентичность (этап 10.3): оператор — из сессии входа, станция — учётка
+    // станции. Пишем в журнал (write-ahead), чтобы доехала до манифеста/выгрузки.
+    let operator_id = operator_identity(app);
+    let station_id = crate::ipc::auth_cmds::station_identity();
+
     // Журнал сессии (write-ahead): открываем до старта, сразу пишем SessionStarted.
     let journal = Journal::open(output_dir).map_err(|e| e.to_string())?;
     let journal = Arc::new(Mutex::new(journal));
@@ -209,6 +217,8 @@ fn start_single(
             channels: settings.audio.channels,
             bit_depth: settings.audio.bit_depth,
             segment_seconds: settings.recorder.segment_seconds,
+            operator_id: operator_id.clone(),
+            station_id,
         })
         .map_err(|e| e.to_string())?;
     }
@@ -237,7 +247,7 @@ fn start_single(
             track_subdirs: Vec::new(),
             // Ось разметки — фактическая (нативная) частота записи (этап 10).
             sample_rate_hz: native.sample_rate_hz,
-            operator_id: operator_identity(),
+            operator_id,
             track_map: None,
             // Тот же журнал, что у reliability: записи разметки и сегментов в один
             // файл сериализуются общим мьютексом (этап 10).
@@ -261,6 +271,10 @@ fn start_multichannel(
     started_at_unix_ms: u64,
     tracks: &[ResolvedTrack],
 ) -> Result<Started, String> {
+    // Идентичность (этап 10.3): оператор из сессии входа, станция — учётка станции.
+    let operator_id = operator_identity(app);
+    let station_id = crate::ipc::auth_cmds::station_identity();
+
     // Карта дорожек (для реконсиляции и UI) + корневой журнал сессии.
     let map = track_map_from_resolved(tracks);
     multitrack::write_track_map(output_dir, &map).map_err(|e| e.to_string())?;
@@ -272,6 +286,8 @@ fn start_multichannel(
             channels: tracks.len() as u16,
             bit_depth: settings.audio.bit_depth,
             segment_seconds: settings.recorder.segment_seconds,
+            operator_id: operator_id.clone(),
+            station_id: station_id.clone(),
         })
         .map_err(|e| e.to_string())?;
     }
@@ -289,6 +305,8 @@ fn start_multichannel(
             channels: 1,
             bit_depth: settings.audio.bit_depth,
             segment_seconds: settings.recorder.segment_seconds,
+            operator_id: operator_id.clone(),
+            station_id: station_id.clone(),
         })
         .map_err(|e| e.to_string())?;
         let tj = Arc::new(Mutex::new(tj));
@@ -326,7 +344,7 @@ fn start_multichannel(
             track_subdirs: subdirs,
             // Ось разметки — общая номинальная частота сессии (этап 10).
             sample_rate_hz: settings.audio.sample_rate_hz,
-            operator_id: operator_identity(),
+            operator_id,
             track_map: Some(map),
             annotations: Mutex::new(AnnotationState::new(Arc::new(Mutex::new(
                 annotation_journal,
@@ -621,11 +639,21 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Автор разметки: до экрана входа оператора — из env (тот же seam, что у
-/// выгрузки, см. [`crate::sync::OPERATOR_ID_ENV`]); пусто, если не задан.
-/// `pub(crate)` — переиспользуется плеером (`ipc::player_cmds`) для аудита
-/// доступа (этап 10.1).
-pub(crate) fn operator_identity() -> String {
+/// Автор разметки/сессий/аудита: с этапа 10.3 — `operator_id` вошедшего оператора
+/// ([`crate::ipc::auth_cmds::current_operator_id`]). В тестах/CI (без входа) —
+/// фолбэк на env-подпорку `OPERATOR_ID_ENV`. `pub(crate)` — переиспользуется
+/// плеером/экспортом.
+pub(crate) fn operator_identity(app: &AppHandle) -> String {
+    let id = crate::ipc::auth_cmds::current_operator_id(app);
+    if !id.is_empty() {
+        return id;
+    }
+    operator_identity_test_fallback()
+}
+
+/// Тестовая/CI-подпорка идентичности из env (боевой путь её не использует, если
+/// оператор вошёл). Отдельная функция — чтобы `#[cfg(test)]`-фолбэк был явным.
+fn operator_identity_test_fallback() -> String {
     std::env::var(crate::sync::OPERATOR_ID_ENV)
         .ok()
         .filter(|v| !v.is_empty())

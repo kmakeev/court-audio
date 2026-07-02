@@ -8,6 +8,7 @@
 //! локального ретеншна ([`retention`]) — зеркало серверного `purge_expired_uploads`.
 
 pub mod annotations;
+pub mod auth_cache;
 pub mod case_binding;
 pub mod case_cache;
 pub mod crypto;

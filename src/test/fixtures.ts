@@ -1,6 +1,7 @@
 // Тестовые фикстуры (синтетика, без реальных ПДн — правило CLAUDE.md).
 import type { Settings } from '../lib/settings';
 import type {
+  AuthStatus,
   DiagnosticsInfo,
   ExportResult,
   ExportSessionInfo,
@@ -50,7 +51,11 @@ export function settingsFixture(): Settings {
     },
     auth: {
       station_identity: { required: true },
-      operator: { required_to_start: true, cached_session_hours: 24 },
+      operator: {
+        required_to_start: true,
+        cached_session_hours: 24,
+        offline_pin: { required: true, min_length: 4 },
+      },
       recording_survives_token_expiry: true,
     },
     case_cache: {
@@ -72,6 +77,22 @@ export function settingsFixture(): Settings {
       policy: 'allowed',
       default_codec: 'wav_pcm',
     },
+  };
+}
+
+/** Статус аутентификации (этап 10.3) — по умолчанию оператор вошёл онлайн. */
+export function authStatusFixture(over: Partial<AuthStatus> = {}): AuthStatus {
+  return {
+    operator: {
+      operator_id: '42',
+      full_name: 'Иванов И. И.',
+      role: 'assistant',
+    },
+    online: true,
+    offline_cached: false,
+    cache_expires_at_unix_ms: 1_700_086_400_000,
+    pin_required: true,
+    ...over,
   };
 }
 

@@ -179,7 +179,7 @@ pub fn export_build_package(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
 
-    let operator_id = operator_identity();
+    let operator_id = operator_identity(&app);
     let at = now_unix_ms();
 
     match check_policy(settings.export.policy, confirmed) {
@@ -358,7 +358,7 @@ pub fn export_burn_dvd(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| session_id.clone());
 
-    let operator_id = operator_identity();
+    let operator_id = operator_identity(&app);
     let at = now_unix_ms();
 
     burner.burn(&package_path, &drive, &label).map_err(|e| e.to_string())?;

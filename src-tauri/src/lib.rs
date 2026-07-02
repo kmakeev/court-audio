@@ -22,6 +22,7 @@ pub fn run() {
         .manage(ipc::audio_cmds::CaptureState::default())
         .manage(ipc::audio_cmds::MonitorState::default())
         .manage(ipc::player_cmds::PlayerState::default())
+        .manage(ipc::auth_cmds::AuthState::default())
         .setup(|app| {
             // Фоновый агент выгрузки (этап 06): низкоприоритетный поток, не на
             // горячем пути захвата. Idle, пока не задан sync.server_base_url.
@@ -44,6 +45,11 @@ pub fn run() {
             ipc::audio_cmds::discard_session,
             ipc::query_cmds::list_sessions,
             ipc::query_cmds::diagnostics,
+            ipc::auth_cmds::auth_login,
+            ipc::auth_cmds::auth_logout,
+            ipc::auth_cmds::auth_status,
+            ipc::auth_cmds::auth_unlock_offline,
+            ipc::auth_cmds::auth_reconnect,
             ipc::case_cmds::get_case_cache_status,
             ipc::case_cmds::search_cases,
             ipc::case_cmds::sync_case_cache,

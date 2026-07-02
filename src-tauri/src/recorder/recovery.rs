@@ -320,6 +320,8 @@ mod tests {
             channels: 1,
             bit_depth: 16,
             segment_seconds: 30,
+            operator_id: String::new(),
+            station_id: String::new(),
         })
         .unwrap();
         // Завершённая сессия: журнал со Stopped.
@@ -331,6 +333,8 @@ mod tests {
             channels: 1,
             bit_depth: 16,
             segment_seconds: 30,
+            operator_id: String::new(),
+            station_id: String::new(),
         })
         .unwrap();
         j2.append(&JournalRecord::Stopped).unwrap();

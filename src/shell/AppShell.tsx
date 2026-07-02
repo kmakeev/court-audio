@@ -1,6 +1,8 @@
 import type { CSSProperties } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Icon, type IconName } from '../design';
+import { useAuth } from '../lib/auth-context';
+import { authLogout } from '../lib/core';
 
 // Оболочка приложения в духе W2.8: тёмная шапка с бренд-знаком + боковая
 // навигация. Свой компонент (а не Header из ex_system, который app-coupled) —
@@ -24,6 +26,19 @@ const APP_TITLE = 'Аудиопротокол';
 const APP_SUBTITLE = 'Аудиопротоколирование заседаний';
 
 export function AppShell() {
+  const navigate = useNavigate();
+  const { status, refresh } = useAuth();
+  const operator = status?.operator ?? null;
+
+  async function onLogout() {
+    try {
+      await authLogout();
+    } finally {
+      refresh();
+      navigate('/login', { replace: true });
+    }
+  }
+
   return (
     <div
       style={{
@@ -63,6 +78,42 @@ export function AppShell() {
             {APP_SUBTITLE}
           </span>
         </div>
+
+        {operator && (
+          <div
+            style={{
+              marginLeft: 'auto',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 16,
+            }}
+          >
+            <ConnectionBadge online={status?.online ?? false} />
+            <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'right' }}>
+              <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--on-dark)' }}>
+                {operator.full_name || `Оператор #${operator.operator_id}`}
+              </span>
+              <span className="text-on-dark-soft" style={{ fontSize: 12 }}>
+                {roleLabel(operator.role)}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void onLogout()}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--on-dark-soft, #ffffff55)',
+                color: 'var(--on-dark)',
+                fontFamily: 'var(--sans)',
+                fontSize: 13,
+                padding: '6px 12px',
+                cursor: 'pointer',
+              }}
+            >
+              Сменить оператора
+            </button>
+          </div>
+        )}
       </header>
 
       <div style={{ display: 'grid', gridTemplateColumns: '232px 1fr' }}>
@@ -96,6 +147,45 @@ export function AppShell() {
       </div>
     </div>
   );
+}
+
+// Индикатор связи с сервером: онлайн-сессия vs оффлайн-разблокировка по кэшу.
+function ConnectionBadge({ online }: { online: boolean }) {
+  return (
+    <span
+      title={online ? 'Связь с сервером есть' : 'Оффлайн-режим (кэшированная сессия)'}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        color: 'var(--on-dark-soft, #ffffffaa)',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: online ? '#3fb950' : '#d29922',
+        }}
+      />
+      {online ? 'Онлайн' : 'Оффлайн'}
+    </span>
+  );
+}
+
+// Человекочитаемая метка роли оператора (роли задаёт ex_system).
+function roleLabel(role: string): string {
+  const map: Record<string, string> = {
+    admin: 'Администратор',
+    judge: 'Судья',
+    assistant: 'Помощник судьи',
+    analyst: 'Аналитик',
+    user: 'Пользователь',
+  };
+  return map[role] ?? role;
 }
 
 function navLinkStyle(isActive: boolean): CSSProperties {

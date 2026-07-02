@@ -625,3 +625,60 @@ export function onReliabilityWarning(
 ): Promise<UnlistenFn> {
   return listen<ReliabilityEvent>('reliability_warning', (ev) => cb(ev.payload));
 }
+
+// ── Аутентификация оператора (этап 10.3) ─────────────────────────────────────
+
+/** Профиль вошедшего оператора (auth_cmds::OperatorView). */
+export interface OperatorInfo {
+  operator_id: string;
+  full_name: string;
+  role: string;
+}
+
+/** Снимок состояния входа (auth_cmds::AuthStatusView). */
+export interface AuthStatus {
+  /** Вошедший оператор или `null`, если входа ещё не было. */
+  operator: OperatorInfo | null;
+  /** Есть ли связь с сервером (онлайн vs оффлайн-разблокировка). */
+  online: boolean;
+  /** Доступен ли оффлайн-старт по валидному кэшу (пока не вошли). */
+  offline_cached: boolean;
+  /** Момент истечения кэша (unix ms) — окно оффлайн-старта. */
+  cache_expires_at_unix_ms: number | null;
+  /** Требуется ли PIN для оффлайн-разблокировки. */
+  pin_required: boolean;
+}
+
+/** Вход оператора: логин/пароль (+PIN для оффлайн-разблокировки) → JWT. */
+export function authLogin(
+  email: string,
+  password: string,
+  pin?: string,
+): Promise<AuthStatus> {
+  return invoke<AuthStatus>('auth_login', { email, password, pin: pin ?? null });
+}
+
+/** Оффлайн-разблокировка по кэшированной сессии (окно + PIN). */
+export function authUnlockOffline(pin?: string): Promise<AuthStatus> {
+  return invoke<AuthStatus>('auth_unlock_offline', { pin: pin ?? null });
+}
+
+/** Тихий refresh при возврате онлайн (без действий оператора). */
+export function authReconnect(): Promise<AuthStatus> {
+  return invoke<AuthStatus>('auth_reconnect');
+}
+
+/** Выход оператора (идущую запись не прерывает). */
+export function authLogout(): Promise<AuthStatus> {
+  return invoke<AuthStatus>('auth_logout');
+}
+
+/** Текущий статус входа (шапка/гейт/экран входа). */
+export function authStatus(): Promise<AuthStatus> {
+  return invoke<AuthStatus>('auth_status');
+}
+
+/** Подписка на смену состояния аутентификации (`auth_state`). */
+export function onAuthState(cb: (e: AuthStatus) => void): Promise<UnlistenFn> {
+  return listen<AuthStatus>('auth_state', (ev) => cb(ev.payload));
+}

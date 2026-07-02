@@ -277,7 +277,7 @@ pub fn player_open_session(
 
     // Аудит доступа (deliverable 4): сразу при открытии — самый ранний и
     // однозначный момент, когда содержимое сессии становится доступно UI.
-    audit::record_access(&store, &session_id, &operator_identity(), now_unix_ms())
+    audit::record_access(&store, &session_id, &operator_identity(&app), now_unix_ms())
         .map_err(|e| e.to_string())?;
 
     let mut machine = PlayerMachine::new();

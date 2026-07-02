@@ -39,9 +39,11 @@ pub enum UploadOutcome {
     IntegrityFailed,
 }
 
-/// Идентичность для регистрации сессии: значение из записи, иначе — из env
-/// (временный seam до экрана входа оператора). Пустая env-переменная
-/// игнорируется. См. [`super::OPERATOR_ID_ENV`] / [`super::STATION_ID_ENV`].
+/// Идентичность для регистрации сессии: значение из записи (с этапа 10.3 оно
+/// проставлено на старте из сессии входа/учётки станции — `SessionStarted`),
+/// иначе — фолбэк на env-подпорку (**только тесты/CI и legacy-сессии без
+/// идентичности**). Пустая env-переменная игнорируется.
+/// См. [`super::OPERATOR_ID_ENV`] / [`super::STATION_ID_ENV`].
 fn identity_or_env(value: &str, env_key: &str) -> String {
     if !value.is_empty() {
         return value.to_string();

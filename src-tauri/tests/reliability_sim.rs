@@ -206,6 +206,8 @@ fn journal_records_lifecycle_for_recovery() {
         channels: 1,
         bit_depth: 16,
         segment_seconds: 1,
+        operator_id: String::new(),
+        station_id: String::new(),
     })
     .unwrap();
     j.append(&JournalRecord::Stopped).unwrap();

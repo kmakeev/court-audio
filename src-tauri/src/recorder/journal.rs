@@ -34,6 +34,15 @@ pub enum JournalRecord {
         channels: u16,
         bit_depth: u16,
         segment_seconds: u32,
+        /// Идентичность оператора из сессии входа (этап 10.3). Write-ahead: доезжает
+        /// до манифеста/выгрузки и переживает рестарт. `#[serde(default)]` —
+        /// журналы до 10.3 читаются с пустой идентичностью.
+        #[serde(default)]
+        operator_id: String,
+        /// Идентичность станции (учётка транспорта выгрузки). `#[serde(default)]`
+        /// — как у `operator_id`.
+        #[serde(default)]
+        station_id: String,
     },
     /// Открыт новый сегмент (имя файла фиксируем до записи данных).
     SegmentStarted {
@@ -132,6 +141,10 @@ pub struct SessionMeta {
     pub channels: u16,
     pub bit_depth: u16,
     pub segment_seconds: u32,
+    /// Идентичность оператора (этап 10.3); пусто в журналах до 10.3.
+    pub operator_id: String,
+    /// Идентичность станции (этап 10.3); пусто в журналах до 10.3.
+    pub station_id: String,
 }
 
 /// Завершённый сегмент по данным журнала.
@@ -182,6 +195,8 @@ pub fn replay(path: &Path) -> std::io::Result<ReplayState> {
                 channels,
                 bit_depth,
                 segment_seconds,
+                operator_id,
+                station_id,
             } => {
                 state.started = Some(SessionMeta {
                     started_at_unix_ms,
@@ -189,6 +204,8 @@ pub fn replay(path: &Path) -> std::io::Result<ReplayState> {
                     channels,
                     bit_depth,
                     segment_seconds,
+                    operator_id,
+                    station_id,
                 });
             }
             JournalRecord::SegmentCompleted {
@@ -223,6 +240,8 @@ mod tests {
             channels: 1,
             bit_depth: 16,
             segment_seconds: 30,
+            operator_id: "42".into(),
+            station_id: "station-A".into(),
         }
     }
 
@@ -257,7 +276,11 @@ mod tests {
         j.append(&JournalRecord::Stopped).unwrap();
 
         let state = replay(j.path()).unwrap();
-        assert_eq!(state.started.as_ref().unwrap().sample_rate_hz, 44_100);
+        let meta = state.started.as_ref().unwrap();
+        assert_eq!(meta.sample_rate_hz, 44_100);
+        // Идентичность (этап 10.3) переживает журнал → реконсиляцию.
+        assert_eq!(meta.operator_id, "42");
+        assert_eq!(meta.station_id, "station-A");
         assert_eq!(state.completed_segments.len(), 2);
         assert_eq!(state.completed_segments[1].frames, 4_000);
         assert_eq!(state.completed_segments[1].started_at_unix_ms, 1_700_000_030_000);

@@ -24,7 +24,6 @@ use crate::store::case_cache::{self, CaseRecord};
 use crate::store::manifest::ManifestStore;
 use crate::store::reconcile;
 use crate::sync::docket::DocketHttpFetcher;
-use crate::sync::OPERATOR_TOKEN_ENV;
 
 /// Свежесть кэша дел для UI (индикатор «синхронизировано/устарел»).
 #[derive(Debug, Clone, Serialize)]
@@ -77,8 +76,8 @@ pub fn search_cases(app: AppHandle, query: String) -> Result<Vec<CaseRecord>, St
 
 /// Синхронизировать кэш дел из докета `ex_system` (`GET /audio/docket/`).
 ///
-/// Требует адрес сервера (`sync.server_base_url`) и операторский токен
-/// (env `COURT_AUDIO_OPERATOR_TOKEN` — до экрана входа). Тянет докет в скоупе
+/// Требует адрес сервера (`sync.server_base_url`) и операторский токен из
+/// сессии входа (этап 10.3; env-подпорка снята). Тянет докет в скоупе
 /// станции (сервер определяет его по идентичности станции), режет до
 /// `case_cache.max_records` (минимизация ПДн) и сохраняет в **зашифрованный**
 /// локальный кэш. Сеть/токен отсутствуют → читаемая ошибка, кэш не трогаем.
@@ -96,12 +95,8 @@ pub fn sync_case_cache(app: AppHandle) -> Result<CaseCacheStatus, String> {
         .server_base_url
         .clone()
         .ok_or("не задан адрес сервера ex_system (sync.server_base_url)")?;
-    let token = std::env::var(OPERATOR_TOKEN_ENV)
-        .ok()
-        .filter(|t| !t.is_empty())
-        .ok_or(
-            "нет операторского токена (COURT_AUDIO_OPERATOR_TOKEN) — выполните вход оператора",
-        )?;
+    let token = crate::ipc::auth_cmds::current_access_token(&app)
+        .ok_or("нет операторского токена — выполните вход оператора")?;
 
     let fetcher = DocketHttpFetcher::new(base_url, token)?;
     let cache = case_cache::sync_into_cache(&fetcher, &cc.scope, cc.max_records, now_unix_ms())

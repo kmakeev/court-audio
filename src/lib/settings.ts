@@ -85,7 +85,12 @@ export interface SyncSettings {
 
 export interface AuthSettings {
   station_identity: { required: boolean };
-  operator: { required_to_start: boolean; cached_session_hours: number };
+  operator: {
+    required_to_start: boolean;
+    cached_session_hours: number;
+    // Этап 10.3: PIN как второй фактор оффлайн-старта по кэшу.
+    offline_pin: { required: boolean; min_length: number };
+  };
   recording_survives_token_expiry: boolean;
 }
 

@@ -188,10 +188,22 @@ segments[] }`). Часть адресуется по треку:
 | `auth.station_identity.required` | С/Б | `true` | У станции своя учётка на зал (транспорт выгрузки) |
 | `auth.operator.required_to_start` | С/Б | `true` | Оператор обязан войти перед стартом записи |
 | `auth.operator.cached_session_hours` | С | `24` | Срок кэш-сессии для оффлайн-старта |
+| `auth.operator.offline_pin.required` | С | `true` | Требовать PIN для оффлайн-старта по кэшированной сессии (второй фактор на станции) |
+| `auth.operator.offline_pin.min_length` | С | `4` | Минимальная длина PIN (валидация при установке на входе) |
 | `auth.recording_survives_token_expiry` | С | `true` | Идущая запись не прерывается при истечении токена |
 
 В модели `AudioRecording` (Б) фиксируются `station_id` **и** обязательный
 `operator_id`.
+
+**Клиент аутентификации (этап 10.3).** Вход — JWT-flow `ex_system`
+(`docs/auth.md` в `ex_system`): `POST /api/token/` (`{email,password}` →
+`{access,refresh}`), `POST /api/token/refresh/` (`{refresh}` → `{access}`),
+профиль оператора — `GET /user/` (`id` → числовой `operator_id`, ФИО, роль).
+**Кэш оффлайн-сессии** (`store/`, зашифрован AES-256-GCM ключом станции) хранит
+`operator_id`/ФИО/роль + **refresh-токен** + хеш PIN (Argon2id) в пределах
+`cached_session_hours`; возврат онлайн — тихий refresh без действий оператора.
+Секреты (пароль, access/refresh, PIN) в `settings.json` **не хранятся**. Детали —
+[`auth.md`](auth.md).
 
 ## Привязка к делу (кэш дел на станции)
 

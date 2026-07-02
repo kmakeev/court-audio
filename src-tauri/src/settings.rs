@@ -406,10 +406,35 @@ impl Default for StationIdentitySettings {
     }
 }
 
+/// `auth.operator.offline_pin` — PIN как второй фактор для оффлайн-старта по
+/// кэшированной сессии (этап 10.3). Сам PIN/его хеш в settings.json **не
+/// хранится** — только политика; хеш Argon2id лежит в зашифрованном блобе
+/// кэш-сессии (`store::auth_cache`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OfflinePinSettings {
+    pub required: bool,
+    pub min_length: u32,
+}
+
+impl Default for OfflinePinSettings {
+    fn default() -> Self {
+        Self {
+            // configuration.md: auth.operator.offline_pin.required = true
+            required: true,
+            // configuration.md: auth.operator.offline_pin.min_length = 4
+            min_length: 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OperatorAuthSettings {
     pub required_to_start: bool,
     pub cached_session_hours: u32,
+    /// `auth.operator.offline_pin` — PIN оффлайн-разблокировки (этап 10.3).
+    /// `#[serde(default)]`: конфиги до 10.3 грузятся и получают дефолт реестра.
+    #[serde(default)]
+    pub offline_pin: OfflinePinSettings,
 }
 
 impl Default for OperatorAuthSettings {
@@ -419,6 +444,7 @@ impl Default for OperatorAuthSettings {
             required_to_start: true,
             // configuration.md: auth.operator.cached_session_hours = 24
             cached_session_hours: 24,
+            offline_pin: OfflinePinSettings::default(),
         }
     }
 }
@@ -649,6 +675,25 @@ mod tests {
         // Экспорт (этап 10.2).
         assert_eq!(s.export.policy, ExportPolicy::Allowed);
         assert_eq!(s.export.default_codec, ExportCodec::WavPcm);
+        // Аутентификация (этап 10.3).
+        assert!(s.auth.station_identity.required);
+        assert!(s.auth.operator.required_to_start);
+        assert_eq!(s.auth.operator.cached_session_hours, 24);
+        assert!(s.auth.operator.offline_pin.required);
+        assert_eq!(s.auth.operator.offline_pin.min_length, 4);
+        assert!(s.auth.recording_survives_token_expiry);
+    }
+
+    #[test]
+    fn pre_10_3_auth_json_without_offline_pin_loads_defaults() {
+        // Конфиг до этапа 10.3 не содержит ключа `offline_pin`: должен грузиться и
+        // получать дефолты реестра (аддитивность через `#[serde(default)]`).
+        let pre = r#"{"auth":{"station_identity":{"required":true},
+            "operator":{"required_to_start":true,"cached_session_hours":24},
+            "recording_survives_token_expiry":true}}"#;
+        let s: Settings = serde_json::from_str(pre).expect("pre-10.3 auth загружается");
+        assert_eq!(s.auth.operator.offline_pin, OfflinePinSettings::default());
+        assert_eq!(s.auth, Settings::default().auth);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::store::manifest::{ManifestStore, SessionStatus, UploadStatus};
 use crate::store::reconcile;
 use crate::sync::client::HttpTransport;
 use crate::sync::scheduler::{process_queue_once, TickContext};
-use crate::sync::{queue, OPERATOR_TOKEN_ENV};
+use crate::sync::queue;
 
 /// Открыть манифест станции по настройкам приложения.
 fn open_store(app: &AppHandle) -> Result<(ManifestStore, PathBuf), String> {
@@ -84,14 +84,6 @@ pub fn resume_upload(app: AppHandle, dir: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Операторский токен выгрузки. До этапа `auth` — из env [`OPERATOR_TOKEN_ENV`]
-/// (секрет не в settings.json). Нет токена → планировщик копит очередь, не теряя.
-fn operator_token() -> Option<String> {
-    std::env::var(OPERATOR_TOKEN_ENV)
-        .ok()
-        .filter(|t| !t.is_empty())
-}
-
 /// Запустить фоновый планировщик выгрузки. Низкоприоритетный поток: периодически
 /// (idle-кадр = `sync.retry.backoff_max_ms`, из реестра — без нового параметра)
 /// прогоняет очередь, если задан `sync.server_base_url`. Не мешает захвату:
@@ -150,7 +142,11 @@ fn run_pass(app: &AppHandle) -> Result<Duration, String> {
         .map(|s| s.0.lock().map(|g| g.is_some()).unwrap_or(false))
         .unwrap_or(false);
 
-    let token = operator_token();
+    // Тихий refresh при возврате онлайн (этап 10.3): оффлайн-сессия + refresh-токен
+    // → свежий access без действий оператора. Ошибка сети — остаёмся оффлайн.
+    crate::ipc::auth_cmds::try_silent_refresh(app);
+    // Токен выгрузки — из сессии входа оператора (env-подпорка снята с боевого пути).
+    let token = crate::ipc::auth_cmds::current_access_token(app);
     let ctx = TickContext {
         token: token.as_deref(),
         is_recording,
