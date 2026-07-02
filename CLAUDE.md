@@ -100,6 +100,10 @@ court-audio/
   инсталляторы, обновления, подготовка к Реестру Минцифры.
 - Фаза 2: `09_multichannel.md` · `10_markers_realtime.md` · `11_gost_signing.md`
   · `12_video.md`.
+- Улучшения функциональности и UI/UX (после v1; обоснование —
+  [`docs/recommendations.md`](docs/recommendations.md)): `10_1_playback.md` ·
+  `10_2_export.md` · `10_3_auth.md` · `10_4_settings_roles.md` ·
+  `10_5_ui_adaptive.md` · `10_6_ux_polish.md`.
 
 ## Принципы «бесперебойности» (нефункциональное ядро)
 
