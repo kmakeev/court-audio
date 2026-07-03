@@ -437,6 +437,67 @@ impl ManifestStore {
         Ok(next_seq)
     }
 
+    /// Дописать событие изменения настроек в станционный журнал (этап 10.4);
+    /// возвращает присвоенный автоинкрементный `seq`. Не привязано к сессии.
+    pub fn append_settings_change(
+        &self,
+        change: &super::settings_audit::SettingsChange,
+    ) -> Result<i64, StoreError> {
+        let changes_json = serde_json::to_string(&change.changes)?;
+        self.conn.execute(
+            "INSERT INTO settings_audit
+                (at_unix_ms, actor_operator_id, source, dangerous, changes_json)
+             VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                change.at_unix_ms as i64,
+                change.actor_operator_id,
+                change.source.as_code(),
+                change.dangerous as i64,
+                changes_json,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Прочитать журнал изменений настроек (новейшие сверху, не более `limit`).
+    pub fn list_settings_audit(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<super::settings_audit::SettingsAuditRecord>, StoreError> {
+        use super::settings_audit::{ChangeSource, FieldChange, SettingsAuditRecord, SettingsChange};
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, at_unix_ms, actor_operator_id, source, dangerous, changes_json
+             FROM settings_audit ORDER BY seq DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |row| {
+            let seq: i64 = row.get(0)?;
+            let at_unix_ms: i64 = row.get(1)?;
+            let actor_operator_id: String = row.get(2)?;
+            let source_code: String = row.get(3)?;
+            let dangerous: i64 = row.get(4)?;
+            let changes_json: String = row.get(5)?;
+            Ok((seq, at_unix_ms, actor_operator_id, source_code, dangerous, changes_json))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (seq, at, actor, source_code, dangerous, changes_json) = r?;
+            let source = ChangeSource::from_code(&source_code)
+                .ok_or_else(|| StoreError::Db(format!("неизвестный source журнала: {source_code}")))?;
+            let changes: Vec<FieldChange> = serde_json::from_str(&changes_json)?;
+            out.push(SettingsAuditRecord {
+                seq,
+                change: SettingsChange {
+                    at_unix_ms: at as u64,
+                    actor_operator_id: actor,
+                    source,
+                    dangerous: dangerous != 0,
+                    changes,
+                },
+            });
+        }
+        Ok(out)
+    }
+
     /// Зафиксировать финальное звено хеш-цепочки сессии.
     pub fn set_final_chain_link(&self, session_id: &str, link: &str) -> Result<(), StoreError> {
         self.update_session_field(

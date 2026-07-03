@@ -34,6 +34,7 @@ const EVENT_LABEL: Record<EventKind, string> = {
   device_back: 'Возврат устройства',
   recovered: 'Восстановление',
   stopped: 'Завершение',
+  playback_accessed: 'Доступ к прослушиванию',
 };
 
 type Load =

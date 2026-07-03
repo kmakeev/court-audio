@@ -23,10 +23,25 @@ pub fn run() {
         .manage(ipc::audio_cmds::MonitorState::default())
         .manage(ipc::player_cmds::PlayerState::default())
         .manage(ipc::auth_cmds::AuthState::default())
+        .manage(ipc::admin_cmds::AdminState::default())
         .setup(|app| {
             // Фоновый агент выгрузки (этап 06): низкоприоритетный поток, не на
             // горячем пути захвата. Idle, пока не задан sync.server_base_url.
             ipc::sync_cmds::spawn_scheduler(app.handle().clone());
+            // Провижининг админ-PIN из env при развёртывании (этап 10.4): на
+            // первом запуске засеивает хеш в зашифрованный блоб; дальше проверка
+            // оффлайн против блоба. Best-effort — отсутствие ключа станции не
+            // роняет старт (админ-изменения тогда просто недоступны).
+            let handle = app.handle().clone();
+            if let Ok(settings) = ipc::load_settings(&handle) {
+                if let Ok(root) = ipc::resolve_storage_root(&handle, &settings) {
+                    let _ = store::admin_pin::provision_from_env_if_absent(
+                        &root,
+                        settings.storage.key_source,
+                        settings.admin.pin.min_length,
+                    );
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -50,6 +65,12 @@ pub fn run() {
             ipc::auth_cmds::auth_status,
             ipc::auth_cmds::auth_unlock_offline,
             ipc::auth_cmds::auth_reconnect,
+            ipc::admin_cmds::admin_status,
+            ipc::admin_cmds::admin_unlock,
+            ipc::admin_cmds::admin_lock,
+            ipc::admin_cmds::get_settings_audit,
+            ipc::admin_cmds::export_station_profile,
+            ipc::admin_cmds::import_station_profile,
             ipc::case_cmds::get_case_cache_status,
             ipc::case_cmds::search_cases,
             ipc::case_cmds::sync_case_cache,

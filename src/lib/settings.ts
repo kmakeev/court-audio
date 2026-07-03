@@ -124,6 +124,11 @@ export interface ExportSettings {
   default_codec: ExportCodec;
 }
 
+/** Разграничение доступа оператор/админ (этап 10.4). */
+export interface AdminSettings {
+  pin: { required: boolean; min_length: number };
+}
+
 export interface Settings {
   audio: AudioSettings;
   recorder: RecorderSettings;
@@ -137,6 +142,44 @@ export interface Settings {
   markers: MarkersSettings;
   player: PlayerSettings;
   export: ExportSettings;
+  admin: AdminSettings;
+}
+
+// ── Разграничение доступа (этап 10.4: ipc::admin_cmds) ───────────────────────
+
+/** Итог сохранения настроек (admin_cmds::SaveOutcome, тег `kind`). */
+export type SaveOutcome =
+  | { kind: 'saved' }
+  | { kind: 'needs_confirmation'; dangerous: string[] };
+
+/** Статус админ-доступа (admin_cmds::AdminStatusView). */
+export interface AdminStatus {
+  /** Задан ли админ-PIN при развёртывании (иначе админ-изменения невозможны). */
+  provisioned: boolean;
+  /** Разблокирован ли админ-доступ в текущем сеансе. */
+  unlocked: boolean;
+  /** Требуется ли админ-PIN политикой (`admin.pin.required`). */
+  required: boolean;
+}
+
+/** Одно изменённое поле в журнале настроек (store::settings_audit::FieldChange). */
+export interface SettingsFieldChange {
+  path: string;
+  old: unknown;
+  new: unknown;
+}
+
+/** Источник изменения настроек (store::settings_audit::ChangeSource). */
+export type ChangeSource = 'manual' | 'import';
+
+/** Запись журнала изменений настроек (store::settings_audit::SettingsAuditRecord). */
+export interface SettingsAuditRecord {
+  seq: number;
+  at_unix_ms: number;
+  actor_operator_id: string;
+  source: ChangeSource;
+  dangerous: boolean;
+  changes: SettingsFieldChange[];
 }
 
 /** Прочитать настройки (Rust возвращает дефолты из реестра при отсутствии файла). */
@@ -144,7 +187,47 @@ export function getSettings(): Promise<Settings> {
   return invoke<Settings>('get_settings');
 }
 
-/** Сохранить настройки в файл конфигурации Tauri. */
-export function saveSettings(settings: Settings): Promise<void> {
-  return invoke('save_settings', { settings });
+/**
+ * Сохранить настройки (этап 10.4). Гейт оператор/админ — на уровне ядра:
+ * админ-изменение без прав отклоняется (`Err`), опасное изменение без
+ * `confirmDangerous` возвращает `needs_confirmation` (диалог подтверждения).
+ */
+export function saveSettings(
+  settings: Settings,
+  confirmDangerous = false,
+): Promise<SaveOutcome> {
+  return invoke<SaveOutcome>('save_settings', { settings, confirmDangerous });
+}
+
+/** Статус админ-доступа (задан ли PIN, разблокирован ли сеанс). */
+export function adminStatus(): Promise<AdminStatus> {
+  return invoke<AdminStatus>('admin_status');
+}
+
+/** Разблокировать админ-доступ по PIN (неверный PIN → `Err`). */
+export function adminUnlock(pin: string): Promise<AdminStatus> {
+  return invoke<AdminStatus>('admin_unlock', { pin });
+}
+
+/** Заблокировать админ-доступ (снять разблокировку сеанса). */
+export function adminLock(): Promise<AdminStatus> {
+  return invoke<AdminStatus>('admin_lock');
+}
+
+/** Экспорт профиля станции: полный `Settings` в JSON (без секретов). */
+export function exportStationProfile(): Promise<string> {
+  return invoke<string>('export_station_profile');
+}
+
+/** Импорт профиля станции (только администратором, журналируется). */
+export function importStationProfile(
+  profileJson: string,
+  confirmDangerous = false,
+): Promise<SaveOutcome> {
+  return invoke<SaveOutcome>('import_station_profile', { profileJson, confirmDangerous });
+}
+
+/** Журнал изменений настроек (новейшие сверху, не более `limit`). */
+export function getSettingsAudit(limit: number): Promise<SettingsAuditRecord[]> {
+  return invoke<SettingsAuditRecord[]>('get_settings_audit', { limit });
 }

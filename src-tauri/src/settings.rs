@@ -601,6 +601,37 @@ impl Default for ExportSettings {
     }
 }
 
+// ── Администрирование: разграничение доступа (этап 10.4) ──────────────────────
+
+/// `admin.pin` — политика админ-PIN (оффлайн-фолбэк прав администратора).
+/// Сам PIN/его хеш в `settings.json` **не хранится** — только политика; хеш
+/// Argon2id лежит в зашифрованном блобе `admin_pin.enc` (`store::admin_pin`),
+/// задаётся при развёртывании через env `COURT_AUDIO_ADMIN_PIN`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminPinSettings {
+    pub required: bool,
+    pub min_length: u32,
+}
+
+impl Default for AdminPinSettings {
+    fn default() -> Self {
+        Self {
+            // configuration.md: admin.pin.required = true
+            required: true,
+            // configuration.md: admin.pin.min_length = 4
+            min_length: 4,
+        }
+    }
+}
+
+/// `admin.*` — разграничение доступа оператор/админ (этап 10.4). В v1 права
+/// администратора = валидный админ-PIN; роль-из-`ex_system` (`admin.access`) —
+/// отложена (открытый вопрос промта).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AdminSettings {
+    pub pin: AdminPinSettings,
+}
+
 // ── Корневая модель ───────────────────────────────────────────────────────────
 
 /// Полная схема настроек станции. Сериализуется в JSON (файл конфигурации
@@ -626,6 +657,9 @@ pub struct Settings {
     /// Мастер экспорта записей (этап 10.2). `#[serde(default)]` на корне уже
     /// покрывает отсутствие ключа в старых конфигах.
     pub export: ExportSettings,
+    /// Разграничение доступа оператор/админ (этап 10.4). `#[serde(default)]` на
+    /// корне уже покрывает отсутствие ключа в конфигах до 10.4.
+    pub admin: AdminSettings,
 }
 
 #[cfg(test)]
@@ -682,6 +716,18 @@ mod tests {
         assert!(s.auth.operator.offline_pin.required);
         assert_eq!(s.auth.operator.offline_pin.min_length, 4);
         assert!(s.auth.recording_survives_token_expiry);
+        // Администрирование (этап 10.4).
+        assert!(s.admin.pin.required);
+        assert_eq!(s.admin.pin.min_length, 4);
+    }
+
+    #[test]
+    fn pre_10_4_json_without_admin_key_loads_defaults() {
+        // Конфиг до этапа 10.4 не содержит ключа `admin`: должен грузиться и
+        // получать дефолты реестра (аддитивность через `#[serde(default)]`).
+        let back: Settings = serde_json::from_str("{}").expect("deserialize empty");
+        assert_eq!(back.admin, AdminSettings::default());
+        assert!(back.admin.pin.required);
     }
 
     #[test]

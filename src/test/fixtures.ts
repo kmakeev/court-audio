@@ -77,6 +77,9 @@ export function settingsFixture(): Settings {
       policy: 'allowed',
       default_codec: 'wav_pcm',
     },
+    admin: {
+      pin: { required: true, min_length: 4 },
+    },
   };
 }
 

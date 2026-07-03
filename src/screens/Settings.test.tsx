@@ -13,51 +13,43 @@ function renderSettings() {
   );
 }
 
-describe('SettingsScreen', () => {
-  it('загружает значения из реестра и сохраняет их', async () => {
+describe('SettingsScreen (оператор)', () => {
+  it('сохраняет оператор-секцию: устройство выбирается из списка', async () => {
     const saved = vi.fn();
     setInvoke('get_settings', () => settingsFixture());
+    setInvoke('list_audio_devices', () => [
+      { name: 'Микрофон зала', is_default: true, default_sample_rate_hz: 44100, default_channels: 1, configs: [] },
+    ]);
     setInvoke('save_settings', (args) => {
       saved(args);
+      return { kind: 'saved' };
     });
     renderSettings();
 
-    // Поле частоты заполнено дефолтом из реестра.
-    expect(await screen.findByDisplayValue('44100')).toBeInTheDocument();
+    // Устройство ввода — выпадающий список, не текстовое поле.
+    const device = await screen.findByLabelText('Устройство ввода');
+    fireEvent.click(device);
+    fireEvent.click(await screen.findByText('Микрофон зала · по умолчанию'));
 
     fireEvent.click(screen.getByText('Сохранить'));
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
-    // Команде передаётся полный объект настроек.
+    // Команде передаётся полный объект настроек + флаг подтверждения.
     expect(saved.mock.calls[0][0]).toHaveProperty('settings');
+    expect(saved.mock.calls[0][0]).toHaveProperty('confirmDangerous', false);
+    expect(saved.mock.calls[0][0].settings.audio.device).toBe('Микрофон зала');
   });
 
-  it('валидирует обязательный URL сервера при авто-выгрузке', async () => {
-    setInvoke('get_settings', () => settingsFixture());
-    setInvoke('save_settings', () => undefined);
-    renderSettings();
-
-    const url = await screen.findByLabelText('URL сервера ex_system');
-    fireEvent.change(url, { target: { value: '' } });
-
-    expect(
-      await screen.findByText('URL сервера обязателен при авто-выгрузке'),
-    ).toBeInTheDocument();
-    const save = screen.getByText('Сохранить').closest('button');
-    expect(save).toBeDisabled();
-  });
-
-  it('справочники разметки (роли/категории) правятся без включения многоканала', async () => {
+  it('справочники разметки (роли/категории) правятся оператором', async () => {
     const saved = vi.fn();
     setInvoke('get_settings', () => settingsFixture());
     setInvoke('save_settings', (args) => {
       saved(args);
+      return { kind: 'saved' };
     });
     renderSettings();
 
-    // Поля доступны сразу (многоканал выключен по умолчанию).
     const roles = await screen.findByLabelText('Роли говорящих (через запятую)');
     const categories = await screen.findByLabelText('Категории закладок (через запятую)');
-    expect(screen.queryByText('Включить многоканальный захват')).toBeInTheDocument();
 
     fireEvent.change(roles, { target: { value: 'judge, defense, expert' } });
     fireEvent.change(categories, { target: { value: 'Закладка, Реплика' } });
@@ -69,39 +61,15 @@ describe('SettingsScreen', () => {
     expect(payload.markers.categories).toEqual(['Закладка', 'Реплика']);
   });
 
-  it('многоканал: включение без дорожек — ошибка, добавление дорожки с ролью — валидно', async () => {
-    const saved = vi.fn();
+  it('админ-параметры на экране оператора не показываются', async () => {
     setInvoke('get_settings', () => settingsFixture());
-    setInvoke('save_settings', (args) => {
-      saved(args);
-    });
-    setInvoke('list_audio_devices', () => [
-      { name: 'Микрофон зала', is_default: true, default_sample_rate_hz: 44100, default_channels: 2, configs: [] },
-    ]);
     renderSettings();
 
-    // Включаем многоканальный режим.
-    fireEvent.click(await screen.findByText('Включить многоканальный захват'));
-    // Пока дорожек нет — валидация запрещает сохранение.
-    expect(
-      await screen.findByText('Добавьте хотя бы одну дорожку или выключите многоканал'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('Сохранить').closest('button')).toBeDisabled();
-
-    // Добавляем дорожку — роль по умолчанию из справочника (judge).
-    fireEvent.click(screen.getByText('Добавить дорожку'));
-    const roleSelect = await screen.findByLabelText('Роль дорожки 1');
-    // Кастомный combobox дизайн-системы: текущее значение — в тексте триггера.
-    expect(roleSelect).toHaveTextContent('judge');
-
-    // Теперь форма валидна и сохраняется с картой дорожек.
-    const save = screen.getByText('Сохранить');
-    await waitFor(() => expect(save.closest('button')).not.toBeDisabled());
-    fireEvent.click(save);
-    await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
-    const payload = saved.mock.calls[0][0].settings;
-    expect(payload.audio.multichannel.enabled).toBe(true);
-    expect(payload.audio.tracks).toHaveLength(1);
-    expect(payload.audio.tracks[0].role).toBe('judge');
+    // Дожидаемся загрузки оператор-секции.
+    expect(await screen.findByLabelText('Устройство ввода')).toBeInTheDocument();
+    // Инфраструктурные/безопасностные поля здесь отсутствуют — только на «Администрировании».
+    expect(screen.queryByLabelText('URL сервера ex_system')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Размер чанка, МБ')).not.toBeInTheDocument();
+    expect(screen.queryByText('Администратор · инфраструктура и безопасность')).not.toBeInTheDocument();
   });
 });

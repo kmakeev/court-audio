@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::settings::Settings;
 
+pub mod admin_cmds;
 pub mod audio_cmds;
 pub mod auth_cmds;
 pub mod case_cmds;
@@ -18,6 +19,7 @@ pub mod export_cmds;
 pub mod marker_cmds;
 pub mod player_cmds;
 pub mod query_cmds;
+pub mod settings_gate;
 pub mod sync_cmds;
 
 /// Имя файла настроек в каталоге конфигурации приложения.
@@ -57,17 +59,38 @@ pub fn get_settings(app: AppHandle) -> Result<Settings, String> {
     load_settings(&app)
 }
 
-/// Сохранить настройки в файл конфигурации (создаёт каталог при отсутствии).
-#[tauri::command]
-pub fn save_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
-    let path = settings_path(&app)?;
+/// Записать настройки в файл конфигурации (создаёт каталог при отсутствии).
+/// Не-командный помощник: используется командой сохранения и импортом профиля
+/// ([`admin_cmds`]) после прохождения гейта разграничения доступа.
+pub(crate) fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    let path = settings_path(app)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("не удалось создать каталог {}: {e}", parent.display()))?;
     }
-    let json = serde_json::to_string_pretty(&settings)
+    let json = serde_json::to_string_pretty(settings)
         .map_err(|e| format!("не удалось сериализовать настройки: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("не удалось записать {}: {e}", path.display()))
+}
+
+/// Сохранить настройки (этап 10.4): гейт разграничения оператор/админ на уровне
+/// ядра, подтверждение опасных изменений и журнал — в [`admin_cmds`]. UI-запрет
+/// недостаточен: оператор не может изменить админ-параметр даже в обход UI.
+#[tauri::command]
+pub fn save_settings(
+    app: AppHandle,
+    admin: tauri::State<'_, admin_cmds::AdminState>,
+    settings: Settings,
+    confirm_dangerous: bool,
+) -> Result<admin_cmds::SaveOutcome, String> {
+    admin_cmds::apply_settings_save(
+        &app,
+        &admin,
+        settings,
+        crate::store::settings_audit::ChangeSource::Manual,
+        false,
+        confirm_dangerous,
+    )
 }
 
 /// Корень локального хранилища: `storage.root_path` или `<data-dir>/recordings`.

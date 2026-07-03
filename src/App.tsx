@@ -6,6 +6,7 @@ import { SessionsScreen } from './screens/Sessions';
 import { PlaybackScreen } from './screens/Playback';
 import { ExportScreen } from './screens/Export';
 import { SettingsScreen } from './screens/Settings';
+import { AdministrationScreen } from './screens/Administration';
 import { DiagnosticsScreen } from './screens/Diagnostics';
 import { LoginScreen } from './screens/Login';
 import { AuthProvider, useAuth } from './lib/auth-context';
@@ -27,6 +28,7 @@ export function App() {
             <Route path="sessions/:dir/listen" element={<PlaybackScreen />} />
             <Route path="sessions/:dir/export" element={<ExportScreen />} />
             <Route path="settings" element={<SettingsScreen />} />
+            <Route path="administration" element={<AdministrationScreen />} />
             <Route path="diagnostics" element={<DiagnosticsScreen />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

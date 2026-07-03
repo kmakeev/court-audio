@@ -7,6 +7,7 @@
 //! записи в JSON для серверной верификации ([`export`], контракт `07`); движок
 //! локального ретеншна ([`retention`]) — зеркало серверного `purge_expired_uploads`.
 
+pub mod admin_pin;
 pub mod annotations;
 pub mod auth_cache;
 pub mod case_binding;
@@ -17,6 +18,7 @@ pub mod export;
 pub mod manifest;
 pub mod reconcile;
 pub mod retention;
+pub mod settings_audit;
 
 /// Единая ошибка слоя хранилища. Подсистемы заворачивают свои ошибки сюда, чтобы
 /// IPC-слой (этап 04) отдавал UI один тип.

@@ -14,7 +14,7 @@ use super::StoreError;
 
 /// Текущая версия схемы манифеста. При изменении таблиц — инкремент + ветка в
 /// [`migrate`].
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Открыть (создав при необходимости) манифест-БД по пути и применить миграции.
 pub fn open(path: &Path) -> Result<Connection, StoreError> {
@@ -193,6 +193,23 @@ pub fn migrate(conn: &Connection) -> Result<(), StoreError> {
             );",
         )?;
         conn.pragma_update(None, "user_version", 4)?;
+    }
+    if version < 5 {
+        // Этап 10.4 (разграничение доступа): станционный журнал изменений
+        // настроек. Не в `events` — та привязана FK к `sessions`, а изменения
+        // настроек станционные (вне сессии). Append-only; `seq` — автоинкремент;
+        // `changes_json` — поле-уровневый diff (старое→новое, без секретов).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings_audit (
+                seq               INTEGER PRIMARY KEY AUTOINCREMENT,
+                at_unix_ms        INTEGER NOT NULL,
+                actor_operator_id TEXT NOT NULL,
+                source            TEXT NOT NULL,
+                dangerous         INTEGER NOT NULL DEFAULT 0,
+                changes_json      TEXT NOT NULL
+            );",
+        )?;
+        conn.pragma_update(None, "user_version", 5)?;
     }
     Ok(())
 }
@@ -415,6 +432,39 @@ mod tests {
             .query_row("SELECT id FROM sessions WHERE id='s1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(sid, "s1");
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn migrate_v4_to_v5_adds_settings_audit() {
+        // Схема v4: settings_audit ещё нет.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (
+                id TEXT PRIMARY KEY, dir TEXT NOT NULL, started_at_unix_ms INTEGER NOT NULL,
+                status TEXT NOT NULL, station_id TEXT NOT NULL, operator_id TEXT NOT NULL,
+                adjudication_ref TEXT, sample_rate_hz INTEGER NOT NULL, channels INTEGER NOT NULL,
+                bit_depth INTEGER NOT NULL, final_chain_link TEXT, upload_status TEXT NOT NULL,
+                server_integrity_verified INTEGER NOT NULL DEFAULT 0, confirmed_at_unix_ms INTEGER,
+                local_purged_at_unix_ms INTEGER, upload_paused INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 4).unwrap();
+
+        migrate(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='settings_audit'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
