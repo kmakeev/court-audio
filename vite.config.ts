@@ -1,7 +1,6 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
-// @ts-expect-error process is a node global available at config time
 const host = process.env.TAURI_DEV_HOST;
 
 // Конфигурация Vite для Tauri: фиксированный порт dev-сервера, без очистки
