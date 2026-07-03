@@ -48,6 +48,7 @@ import {
   type ChannelLevel,
   type DeviceInfo,
   type LevelEvent,
+  type MarkerState,
   type RecoverableSession,
   type ReliabilityEvent,
 } from '../lib/core';
@@ -773,14 +774,15 @@ function LiveAnnotations({
         hint="Закладки и роли говорящих по ходу заседания — подсказки для протокола"
       />
 
-      {/* Комментарий к следующей закладке (опционально). */}
+      {/* Комментарий к следующей закладке (опционально) — многострочный. */}
       <label style={{ display: 'block', marginTop: 12 }}>
         <span style={fieldLabelStyle}>Комментарий к закладке (необязательно)</span>
-        <input
+        <textarea
           aria-label="Комментарий к закладке"
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           placeholder="например: реплика свидетеля"
+          rows={2}
           style={{
             width: '100%',
             padding: '8px 10px',
@@ -788,6 +790,9 @@ function LiveAnnotations({
             background: 'var(--paper)',
             color: 'var(--ink)',
             fontSize: 13,
+            fontFamily: 'var(--sans)',
+            resize: 'vertical',
+            boxSizing: 'border-box',
           }}
         />
       </label>
@@ -842,15 +847,17 @@ function LiveAnnotations({
         </div>
       </div>
 
-      {/* Открытые интервалы ролей — можно завершить. */}
+      {/* Открытые интервалы ролей. Новый говорящий закрывает предыдущего
+          автоматически (ядро); «Завершить» нужно лишь чтобы закрыть последнего,
+          когда речь окончена и следующего пока нет. */}
       {openSpans.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <span style={fieldLabelStyle}>Идёт речь</span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {openSpans.map((s) => (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <Tag tone="accent">{s.role}</Tag>
-                <span className="num" style={{ fontSize: 12, color: 'var(--ink-soft)', flex: 1 }}>
+                <span className="num" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>
                   с {formatClock(Math.floor(s.start_offset_ms / 1000))}
                 </span>
                 <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => run(endRoleSpan(s.id))}>
@@ -868,30 +875,9 @@ function LiveAnnotations({
         {ann.markers.length === 0 ? (
           <p style={{ fontSize: 12, color: 'var(--muted)', margin: 0 }}>Меток пока нет.</p>
         ) : (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {ann.markers.map((m) => (
-              <li
-                key={m.id}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
-              >
-                <span className="num" style={{ fontSize: 12, color: 'var(--ink)', width: 72 }}>
-                  {formatClock(Math.floor(m.offset_ms / 1000))}
-                </span>
-                <div style={{ minWidth: 180 }}>
-                  <Select
-                    ariaLabel={`Категория метки ${formatClock(Math.floor(m.offset_ms / 1000))}`}
-                    value={m.category}
-                    onChange={(v) => run(editMarker(m.id, v, m.comment ?? null))}
-                    options={categoryOptions(categories, m.category)}
-                  />
-                </div>
-                {m.comment && (
-                  <span style={{ fontSize: 12, color: 'var(--ink-soft)', flex: 1 }}>{m.comment}</span>
-                )}
-                <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => run(removeMarker(m.id))}>
-                  Удалить
-                </Button>
-              </li>
+              <MarkerRow key={m.id} marker={m} categories={categories} run={run} />
             ))}
           </ul>
         )}
@@ -908,6 +894,82 @@ function categoryOptions(categories: string[], current: string) {
     opts.unshift({ value: current, label: `${current} (вне справочника)` });
   }
   return opts;
+}
+
+// Строка метки в списке сессии: правка категории (сразу) и комментария (по
+// завершении ввода — blur/Enter, чтобы не журналировать каждый символ), удаление.
+// Каждая правка — отдельное журналируемое действие под хеш-цепочкой (как в ядре).
+function MarkerRow({
+  marker,
+  categories,
+  run,
+}: {
+  marker: MarkerState;
+  categories: string[];
+  run: (p: Promise<AnnotationSnapshot>) => void;
+}) {
+  const [comment, setComment] = useState(marker.comment ?? '');
+  // Синхронизация с внешним снимком (после правки/замены разметки).
+  useEffect(() => {
+    setComment(marker.comment ?? '');
+  }, [marker.comment]);
+
+  const time = formatClock(Math.floor(marker.offset_ms / 1000));
+  const committedComment = marker.comment ?? '';
+
+  const commitComment = () => {
+    const next = comment.trim();
+    if (next !== committedComment) {
+      run(editMarker(marker.id, marker.category, next || null));
+    }
+  };
+
+  return (
+    <li style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <span className="num" style={{ fontSize: 12, color: 'var(--ink)', width: 64, flexShrink: 0 }}>
+        {time}
+      </span>
+      <div style={{ width: 160, flexShrink: 0 }}>
+        <Select
+          ariaLabel={`Категория метки ${time}`}
+          value={marker.category}
+          // Правку комментария сохраняем вместе со сменой категории (не теряем ввод).
+          onChange={(v) => run(editMarker(marker.id, v, comment.trim() || null))}
+          options={categoryOptions(categories, marker.category)}
+        />
+      </div>
+      <input
+        aria-label={`Комментарий метки ${time}`}
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        onBlur={commitComment}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        placeholder="комментарий…"
+        style={{
+          flex: 1,
+          minWidth: 160,
+          padding: '8px 10px',
+          border: '1px solid var(--hairline)',
+          background: 'var(--paper)',
+          color: 'var(--ink)',
+          fontSize: 13,
+          boxSizing: 'border-box',
+        }}
+      />
+      <Button
+        variant="secondary"
+        style={NEUTRAL_BTN}
+        onClick={() => run(removeMarker(marker.id))}
+      >
+        Удалить
+      </Button>
+    </li>
+  );
 }
 
 // ── Пофайловые метры по дорожкам (многоканал — этап 09) ──────────────────────

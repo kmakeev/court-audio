@@ -93,6 +93,40 @@ impl AnnotationState {
     pub fn snapshot(&self) -> AnnotationSnapshot {
         annotations::fold(&self.entries)
     }
+
+    /// Завершить все открытые интервалы ролей в указанный момент (этап 10.6):
+    /// новый говорящий автоматически закрывает предыдущего, без ручного
+    /// «Завершить». Каждое закрытие — отдельное журналируемое действие `RoleEnded`
+    /// под хеш-цепочкой (как ручное завершение). Возвращает id закрытых интервалов.
+    pub fn end_open_role_spans(
+        &mut self,
+        offset_samples: u64,
+        offset_ms: u64,
+        operator: &str,
+        at_unix_ms: u64,
+    ) -> Result<Vec<String>, String> {
+        let open: Vec<String> = self
+            .snapshot()
+            .role_spans
+            .into_iter()
+            .filter(|s| s.end_offset_ms.is_none())
+            .map(|s| s.id)
+            .collect();
+        for id in &open {
+            self.record(
+                AnnotationAction::RoleEnded,
+                id.clone(),
+                None,
+                None,
+                None,
+                offset_samples,
+                offset_ms,
+                operator.to_string(),
+                at_unix_ms,
+            )?;
+        }
+        Ok(open)
+    }
 }
 
 /// Сгенерировать стабильный id закладки/интервала: префикс + время + случайный
@@ -247,6 +281,9 @@ pub fn start_role_span(
     ensure_in(&settings.audio.roles, &resolved_role, "роль")?;
 
     with_active(&state, |ann, offset_samples, offset_ms, operator| {
+        // Новый говорящий автоматически завершает предыдущего (этап 10.6): не нужно
+        // жать «Завершить», если уже отмечен следующий. Закрытие — в тот же момент.
+        ann.end_open_role_spans(offset_samples, offset_ms, operator, now_unix_ms())?;
         ann.record(
             AnnotationAction::RoleStarted,
             new_id("r"),
@@ -350,5 +387,65 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state.annotations.len(), 2);
+    }
+
+    #[test]
+    fn end_open_role_spans_closes_previous_speaker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let journal = Arc::new(Mutex::new(Journal::open(tmp.path()).unwrap()));
+        let mut st = AnnotationState::new(journal);
+
+        // Первый говорящий — интервал открыт.
+        st.record(
+            AnnotationAction::RoleStarted,
+            "r1".into(),
+            None,
+            Some("judge".into()),
+            None,
+            100,
+            2,
+            "op".into(),
+            1_700_000_000_100,
+        )
+        .unwrap();
+        assert_eq!(st.snapshot().role_spans.iter().filter(|s| s.end_offset_ms.is_none()).count(), 1);
+
+        // Отмечаем следующего: авто-завершение закрывает предыдущего в тот же момент.
+        let closed = st
+            .end_open_role_spans(200, 4, "op", 1_700_000_000_200)
+            .unwrap();
+        assert_eq!(closed, vec!["r1".to_string()]);
+        st.record(
+            AnnotationAction::RoleStarted,
+            "r2".into(),
+            None,
+            Some("defense".into()),
+            None,
+            200,
+            4,
+            "op".into(),
+            1_700_000_000_200,
+        )
+        .unwrap();
+
+        let snap = st.snapshot();
+        assert_eq!(snap.role_spans.len(), 2);
+        // r1 закрыт на 4 мс, r2 открыт.
+        let r1 = snap.role_spans.iter().find(|s| s.id == "r1").unwrap();
+        let r2 = snap.role_spans.iter().find(|s| s.id == "r2").unwrap();
+        assert_eq!(r1.end_offset_ms, Some(4));
+        assert_eq!(r2.end_offset_ms, None);
+        // Цепочка целостна после авто-завершения.
+        assert!(verify_annotation_chain(&st.entries));
+    }
+
+    #[test]
+    fn end_open_role_spans_noop_when_none_open() {
+        let tmp = tempfile::tempdir().unwrap();
+        let journal = Arc::new(Mutex::new(Journal::open(tmp.path()).unwrap()));
+        let mut st = AnnotationState::new(journal);
+        let closed = st.end_open_role_spans(0, 0, "op", 1).unwrap();
+        assert!(closed.is_empty());
+        assert!(st.entries.is_empty()); // ничего не записали
     }
 }
