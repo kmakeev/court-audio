@@ -13,6 +13,14 @@
   box-sizing: border-box;
 }
 
+/* Сброс «родной» отрисовки кнопок webview (WKWebView/GTK): без него системный
+ * контур/бевел проступает поверх токенов PravoUI (заметнее всего на залитых
+ * бордовых кнопках). Все кнопки в приложении стилизуются токенами. */
+button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 html,
 body,
 #root {

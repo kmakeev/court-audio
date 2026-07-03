@@ -13,6 +13,9 @@ const baseStyles: Record<Variant, CSSProperties> = {
   primary: {
     background: 'var(--accent)',
     color: 'var(--paper)',
+    // Явная рамка в цвет фона: без неё webview (WKWebView) рисует свою «родную»
+    // рамку кнопки — светлый контур вокруг бордовой заливки (см. также `appearance`).
+    border: '1px solid var(--accent)',
     height: 44,
     padding: '0 20px',
     fontWeight: 500,
@@ -72,6 +75,10 @@ export function Button({
         cursor: isDisabled ? 'default' : 'pointer',
         opacity: isDisabled ? 0.55 : 1,
         transition: 'background 120ms ease, opacity 120ms ease',
+        // Гасим «родную» отрисовку кнопки webview (WKWebView/GTK): иначе поверх
+        // наших токенов виден системный контур/бевел. Сброс — для всех вариантов.
+        appearance: 'none',
+        WebkitAppearance: 'none',
         ...baseStyles[variant],
         ...style,
       }}

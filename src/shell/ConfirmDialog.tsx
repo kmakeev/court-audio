@@ -89,10 +89,12 @@ export function ConfirmDialog({
             {description}
           </p>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+        {/* alignItems: center + равная высота — иначе secondary (38) и primary
+            (44) кнопки стоят на разной высоте и «прыгают» по вертикали. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }}>
           <Button
             variant="secondary"
-            style={{ color: 'var(--ink)', borderColor: 'var(--ink-soft)' }}
+            style={{ color: 'var(--ink)', borderColor: 'var(--ink-soft)', height: 44 }}
             onClick={onCancel}
           >
             {cancelLabel}
@@ -100,7 +102,11 @@ export function ConfirmDialog({
           <Button
             autoFocus
             variant={tone === 'danger' ? 'primary' : 'secondary'}
-            style={tone === 'neutral' ? { color: 'var(--ink)', borderColor: 'var(--ink-soft)' } : undefined}
+            style={
+              tone === 'neutral'
+                ? { color: 'var(--ink)', borderColor: 'var(--ink-soft)', height: 44 }
+                : { height: 44 }
+            }
             onClick={onConfirm}
           >
             {confirmLabel}
