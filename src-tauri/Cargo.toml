@@ -1,6 +1,6 @@
 [package]
 name = "court-audio"
-version = "0.1.0"
+version = "0.2.0"
 description = "«Аудиопротокол» — модуль аудиопротоколирования судебных заседаний"
 authors = ["Аудиопротокол"]
 edition = "2021"
