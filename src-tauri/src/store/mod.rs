@@ -18,6 +18,7 @@ pub mod export;
 pub mod manifest;
 pub mod reconcile;
 pub mod retention;
+pub mod session_comment;
 pub mod settings_audit;
 
 /// Единая ошибка слоя хранилища. Подсистемы заворачивают свои ошибки сюда, чтобы

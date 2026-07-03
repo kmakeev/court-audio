@@ -18,6 +18,7 @@ import {
   RECORDING_STATUS_TONE,
 } from '../lib/recording-status';
 import { CasePicker } from '../components/CasePicker';
+import { SelfTestPanel } from '../components/SelfTest';
 import { ConfirmDialog } from '../shell/ConfirmDialog';
 import {
   addMarker,
@@ -51,6 +52,8 @@ import {
   type ReliabilityEvent,
 } from '../lib/core';
 import { getSettings, type Settings } from '../lib/settings';
+import { maybeBeep, reliabilityToAlert } from '../lib/alerts';
+import { humanizeError } from '../lib/errors';
 import { useAuth } from '../lib/auth-context';
 
 // Экран «Запись» (этап 04). UI станции захвата: устройство, живые индикаторы
@@ -71,6 +74,11 @@ const BIND_DEBOUNCE_MS = 500;
 // финализируются мгновенно, и без этого порога подтверждение мелькнуло бы
 // незаметно. Только отображение, не бизнес-параметр реестра.
 const STOP_INDICATOR_MIN_MS = 700;
+
+// Кнопки управления записью в одном ряду: primary (Старт/Стоп) в DS высотой 44,
+// secondary (Пауза/Возобновить) — 38. Приводим нейтральные к той же высоте, чтобы
+// ряд не «прыгал» и кнопки были одного размера.
+const CONTROL_BTN: CSSProperties = { ...NEUTRAL_BTN, height: 44 };
 
 interface SessionInfo {
   output_dir: string | null;
@@ -113,6 +121,8 @@ export function RecordScreen() {
   // Прогресс активной сессии (каталог + число записанных сегментов) —
   // наглядное подтверждение, что запись действительно идёт.
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
+  // Панель «Проверка перед заседанием» (self-test, этап 10.6): по кнопке, до старта.
+  const [showSelfTest, setShowSelfTest] = useState(false);
 
   // Активные предупреждения надёжности (по событиям ядра).
   const [deviceLost, setDeviceLost] = useState(false);
@@ -122,26 +132,33 @@ export function RecordScreen() {
   // Незавершённые сессии для восстановления (скан при монтировании).
   const [recoverable, setRecoverable] = useState<RecoverableSession[]>([]);
 
-  const handleWarning = useCallback((e: ReliabilityEvent) => {
-    switch (e.kind) {
-      case 'device_lost':
-        setDeviceLost(true);
-        break;
-      case 'device_back':
-        setDeviceLost(false);
-        break;
-      case 'disk_low':
-      case 'disk_critical':
-        setDiskWarning(e);
-        break;
-      case 'max_duration_warning':
-        setMaxDuration(true);
-        break;
-      case 'watchdog_restart':
-        // Перезапуск прозрачен для оператора — запись продолжается.
-        break;
-    }
-  }, []);
+  const soundAlerts = settings?.ux.sound_alerts.enabled ?? false;
+  const handleWarning = useCallback(
+    (e: ReliabilityEvent) => {
+      switch (e.kind) {
+        case 'device_lost':
+          setDeviceLost(true);
+          break;
+        case 'device_back':
+          setDeviceLost(false);
+          break;
+        case 'disk_low':
+        case 'disk_critical':
+          setDiskWarning(e);
+          break;
+        case 'max_duration_warning':
+          setMaxDuration(true);
+          break;
+        case 'watchdog_restart':
+          // Перезапуск прозрачен для оператора — запись продолжается.
+          break;
+      }
+      // Опциональный звуковой сигнал о сбое (этап 10.6): дублирует баннер выше.
+      const alert = reliabilityToAlert(e);
+      if (alert) maybeBeep(soundAlerts, alert);
+    },
+    [soundAlerts],
+  );
 
   // Первичная загрузка + восстановление состояния идущей записи. Запись живёт в
   // фоне (ядре), а компонент экрана размонтируется при переходе между вкладками
@@ -391,8 +408,21 @@ export function RecordScreen() {
           >
             {formatClock(elapsedSec)}
           </span>
+          {!isActive && !saving && (
+            <Button
+              variant="secondary"
+              style={{ ...NEUTRAL_BTN, marginLeft: 'auto' }}
+              onClick={() => setShowSelfTest((v) => !v)}
+              aria-expanded={showSelfTest}
+            >
+              {showSelfTest ? 'Скрыть проверку' : 'Проверка перед заседанием'}
+            </Button>
+          )}
         </div>
       </Card>
+
+      {/* Проверка перед заседанием (self-test, этап 10.6): по кнопке, до старта. */}
+      {showSelfTest && !isActive && <SelfTestPanel numeral="✓" />}
 
       {error && (
         <CriticalNotice variant="critical" title="Ошибка записи" description={error} />
@@ -595,12 +625,12 @@ export function RecordScreen() {
           </Button>
         )}
         {state === 'recording' && (
-          <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => setConfirm('pause')}>
+          <Button variant="secondary" style={CONTROL_BTN} onClick={() => setConfirm('pause')}>
             ❚❚ Пауза
           </Button>
         )}
         {state === 'paused' && (
-          <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => void onResume()}>
+          <Button variant="secondary" style={CONTROL_BTN} onClick={() => void onResume()}>
             ▶ Возобновить
           </Button>
         )}
@@ -686,6 +716,15 @@ function LiveAnnotations({
     [run, comment],
   );
 
+  // Отмена последней метки (этап 10.6, мелочь трения): удаляем самую позднюю метку
+  // (наибольшее смещение — при живой записи это последняя поставленная). Удаление
+  // журналируется как действие под хеш-цепочкой (как правка — целостность разметки).
+  const lastMarkerId =
+    ann.markers.length > 0 ? ann.markers[ann.markers.length - 1].id : null;
+  const undoLastMarker = useCallback(() => {
+    if (lastMarkerId) run(removeMarker(lastMarkerId));
+  }, [lastMarkerId, run]);
+
   // Активная (самая громкая) дорожка — для подстановки роли (многоканал).
   const activeTrackId = useMemo(() => {
     let best: number | null = null;
@@ -702,12 +741,18 @@ function LiveAnnotations({
   const suggestedRole =
     multichannel && activeTrackId != null ? settings.audio.tracks[activeTrackId]?.role : undefined;
 
-  // Горячие клавиши: цифры 1..N — категории закладок. Не перехватываем при
-  // фокусе в поле ввода (комментарий/№ дела). Совместимо с R/S/Пробел выше.
+  // Горячие клавиши: цифры 1..N — категории закладок; Backspace — отмена последней
+  // метки. Не перехватываем при фокусе в поле ввода (комментарий/№ дела).
+  // Совместимо с R/S/Пробел выше.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      if (e.key === 'Backspace') {
+        e.preventDefault();
+        undoLastMarker();
+        return;
+      }
       const n = Number(e.key);
       if (Number.isInteger(n) && n >= 1 && n <= categories.length) {
         e.preventDefault();
@@ -716,7 +761,7 @@ function LiveAnnotations({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, onAddMarker]);
+  }, [categories, onAddMarker, undoLastMarker]);
 
   const openSpans = ann.role_spans.filter((s) => s.end_offset_ms == null);
 
@@ -766,6 +811,16 @@ function LiveAnnotations({
             <span style={{ fontSize: 12, color: 'var(--muted)' }}>
               Категории не заданы — настройте справочник в «Настройках».
             </span>
+          )}
+          {lastMarkerId && (
+            <Button
+              variant="secondary"
+              style={NEUTRAL_BTN}
+              onClick={undoLastMarker}
+              title="Отменить последнюю метку (Backspace)"
+            >
+              ⌫ Отменить последнюю метку
+            </Button>
           )}
         </div>
       </div>
@@ -1041,8 +1096,7 @@ function holdAtLeast(startedAt: number, minMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
+// Человекочитаемый текст ошибки ядра (этап 10.6, словарь `lib/errors`).
 function describeError(e: unknown): string {
-  if (typeof e === 'string') return e;
-  if (e instanceof Error) return e.message;
-  return 'неизвестная ошибка';
+  return humanizeError(e);
 }

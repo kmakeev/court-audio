@@ -137,6 +137,12 @@ export interface UiSettings {
   compact_overlay: { enabled: boolean };
 }
 
+/** UX-пакет (этап 10.6). Блокировка сна/автозапуск — на уровне ОС (не в реестре). */
+export interface UxSettings {
+  /** Опциональный звуковой сигнал при сбоях (дефолт false — этикет зала). */
+  sound_alerts: { enabled: boolean };
+}
+
 export interface Settings {
   audio: AudioSettings;
   recorder: RecorderSettings;
@@ -152,6 +158,7 @@ export interface Settings {
   export: ExportSettings;
   admin: AdminSettings;
   ui: UiSettings;
+  ux: UxSettings;
 }
 
 // ── Разграничение доступа (этап 10.4: ipc::admin_cmds) ───────────────────────

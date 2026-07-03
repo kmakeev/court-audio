@@ -84,6 +84,9 @@ export function settingsFixture(): Settings {
       hall_mode: { enabled: true },
       compact_overlay: { enabled: false },
     },
+    ux: {
+      sound_alerts: { enabled: false },
+    },
   };
 }
 

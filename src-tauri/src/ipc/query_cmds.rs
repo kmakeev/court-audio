@@ -11,16 +11,17 @@
 //! это ядро (01–03); здесь их не дублируем, лишь отображаем зафиксированное
 //! состояние.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::audio::devices::{list_input_devices, DeviceInfo};
+use crate::integrity::annotations::{self, MarkerState, RoleSpanState};
 use crate::ipc::{load_settings, resolve_storage_root, MANIFEST_FILE};
 use crate::reliability::disk_monitor::{classify, free_space_mb, DiskStatus, DiskThresholds};
 use crate::store::manifest::{EventRecord, ManifestStore, SessionRecord};
-use crate::store::reconcile;
+use crate::store::{reconcile, session_comment};
 
 /// Открыть манифест станции в корне хранилища и реконсилировать все каталоги
 /// сессий из их журналов (идемпотентно). Так в манифесте появляются сессии,
@@ -216,6 +217,101 @@ fn disk_status_code(status: DiskStatus) -> &'static str {
     }
 }
 
+/// Детальная карточка сессии (этап 10.6, deliverable 3). Read-only агрегат
+/// зафиксированного состояния конкретной сессии для экрана «Карточка сессии»:
+/// журнал событий, статус целостности, свёрнутая разметка (метки/роли),
+/// комментарий оператора. **Без аудит-побочек** (в отличие от
+/// `player_open_session`, который пишет `playback_accessed`) — это просмотр
+/// метаданных, а не доступ к аудиосодержимому.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionDetail {
+    #[serde(flatten)]
+    pub record: SessionRecord,
+    pub segment_count: u32,
+    pub duration_seconds: u64,
+    pub integrity: IntegritySummary,
+    pub events: Vec<EventRecord>,
+    pub markers: Vec<MarkerState>,
+    pub role_spans: Vec<RoleSpanState>,
+    /// Свободный комментарий оператора (`store::session_comment`), если задан.
+    pub comment: Option<String>,
+}
+
+/// Открыть манифест и реконсилировать конкретный каталог сессии (без обхода всего
+/// корня — карточке нужна одна сессия). Возвращает store + резолвнутый `id`.
+fn open_and_reconcile_one(
+    app: &AppHandle,
+    dir: &str,
+) -> Result<(ManifestStore, String), String> {
+    let settings = load_settings(app)?;
+    let root = resolve_storage_root(app, &settings)?;
+    let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
+    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(dir))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
+    Ok((store, session_id))
+}
+
+/// Детальная карточка сессии по её каталогу. Источник данных экрана «Карточка
+/// сессии»; действия «Прослушать»/«Экспортировать» — отдельные команды (10.1/10.2).
+#[tauri::command]
+pub fn session_detail(app: AppHandle, dir: String) -> Result<SessionDetail, String> {
+    let settings = load_settings(&app)?;
+    let (store, session_id) = open_and_reconcile_one(&app, &dir)?;
+
+    let record = store
+        .get_session(&session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("сессия {session_id} не найдена"))?;
+
+    let segs = store.get_segments(&session_id).map_err(|e| e.to_string())?;
+    let total_frames: u64 = segs.iter().map(|s| s.frames).sum();
+    let duration_seconds = if record.sample_rate_hz > 0 {
+        total_frames / record.sample_rate_hz as u64
+    } else {
+        0
+    };
+    let segments_hashed = segs.iter().filter(|s| !s.sha256.is_empty()).count() as u32;
+    let integrity = IntegritySummary {
+        session_id: session_id.clone(),
+        segments: segs.len() as u32,
+        segments_hashed,
+        final_chain_link: record.final_chain_link.clone(),
+        hash_chain_enabled: settings.integrity.hash_chain,
+        event_log_enabled: settings.integrity.event_log,
+    };
+
+    let events = store.get_events(&session_id).map_err(|e| e.to_string())?;
+    let snapshot = annotations::fold(&store.get_annotations(&session_id).map_err(|e| e.to_string())?);
+    let comment = session_comment::read(&PathBuf::from(&record.dir));
+
+    Ok(SessionDetail {
+        segment_count: segs.len() as u32,
+        duration_seconds,
+        integrity,
+        events,
+        markers: snapshot.markers,
+        role_spans: snapshot.role_spans,
+        comment,
+        record,
+    })
+}
+
+/// Сохранить/очистить свободный комментарий оператора к сессии (мелочь трения
+/// 10.6). Пустой текст удаляет заметку. Пишется файлом в каталоге сессии
+/// (`store::session_comment`) — вне контура целостности/выгрузки.
+#[tauri::command]
+pub fn set_session_comment(app: AppHandle, dir: String, text: String) -> Result<(), String> {
+    // Резолвим каталог сессии через манифест (тот же путь, что и карточка) —
+    // чтобы не писать в произвольный каталог, а только в начатую сессию.
+    let (store, session_id) = open_and_reconcile_one(&app, &dir)?;
+    let record = store
+        .get_session(&session_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("сессия {session_id} не найдена"))?;
+    session_comment::write(&PathBuf::from(&record.dir), &text).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +398,38 @@ mod tests {
         assert_eq!(disk_status_code(DiskStatus::Ok), "ok");
         assert_eq!(disk_status_code(DiskStatus::Low), "low");
         assert_eq!(disk_status_code(DiskStatus::Critical), "critical");
+    }
+
+    #[test]
+    fn session_detail_pieces_from_reconciled_session() {
+        // Путь данных карточки сессии (session_detail): собрать сессию фикстурой,
+        // реконсилировать в манифест, затем прочитать события/сегменты/целостность
+        // и комментарий — те же вызовы store, что делает команда.
+        let tmp = tempfile::tempdir().unwrap();
+        build_session(tmp.path(), "session-42", true);
+        let dir = tmp.path().join("session-42");
+
+        let store = ManifestStore::open(&tmp.path().join(MANIFEST_FILE)).unwrap();
+        let session_id = reconcile::reconcile_session(&store, &dir).unwrap().unwrap();
+
+        let record = store.get_session(&session_id).unwrap().unwrap();
+        assert_eq!(record.status, crate::store::manifest::SessionStatus::Stopped);
+
+        let segs = store.get_segments(&session_id).unwrap();
+        assert_eq!(segs.len(), 1);
+        let hashed = segs.iter().filter(|s| !s.sha256.is_empty()).count();
+        assert_eq!(hashed, segs.len()); // целостность зафиксирована реконсиляцией
+
+        // Журнал событий содержит старт и стоп.
+        let events = store.get_events(&session_id).unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e.event.kind,
+            crate::integrity::events::EventKind::SessionStarted
+        )));
+
+        // Комментарий: пусто → задать → прочитать.
+        assert_eq!(session_comment::read(&dir), None);
+        session_comment::write(&dir, "проверка связи").unwrap();
+        assert_eq!(session_comment::read(&dir).as_deref(), Some("проверка связи"));
     }
 }

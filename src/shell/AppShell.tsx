@@ -13,6 +13,8 @@ import {
   useRecordingStatus,
 } from '../lib/recording-status';
 import { HallMode } from '../components/HallMode';
+import { ConfirmDialog } from './ConfirmDialog';
+import { useCloseGuard } from './useCloseGuard';
 
 // Оболочка приложения в духе W2.8: тёмная шапка с бренд-знаком + боковая
 // навигация. Свой компонент (а не Header из ex_system, который app-coupled) —
@@ -56,6 +58,10 @@ function AppShellInner() {
   const navigate = useNavigate();
   const { status, refresh } = useAuth();
   const operator = status?.operator ?? null;
+
+  // Защита закрытия окна с идущей записью (этап 10.6): подтверждение перед выходом.
+  const { state: recState } = useRecordingStatus();
+  const closeGuard = useCloseGuard(isSessionActive(recState));
 
   // Состояние адаптивной навигации (бургер на узких окнах) и режима зала.
   const [navOpen, setNavOpen] = useState(false);
@@ -228,6 +234,18 @@ function AppShellInner() {
       </div>
 
       {ui.hallMode && hallOpen && <HallMode onClose={() => setHallOpen(false)} />}
+
+      {/* Защита закрытия окна с идущей записью (этап 10.6): подтверждение выхода. */}
+      <ConfirmDialog
+        open={closeGuard.pending}
+        title="Закрыть приложение во время записи?"
+        description="Идёт запись заседания. Рекомендуется сначала остановить её на экране «Запись». Закрытие приложения не прерывает уже сохранённые сегменты, но новая запись прекратится."
+        confirmLabel="Всё равно закрыть"
+        cancelLabel="Остаться"
+        tone="danger"
+        onConfirm={closeGuard.confirmClose}
+        onCancel={closeGuard.cancelClose}
+      />
     </div>
   );
 }

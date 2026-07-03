@@ -643,6 +643,20 @@ export function AdminSections({
               Разрешить компакт-окно статуса
             </Checkbox>
           </LabeledWithTip>
+          <LabeledWithTip
+            label="Звуковой сигнал о сбоях"
+            tip="Короткий звук при сбоях записи (обрыв устройства, критически мало места, ошибка выгрузки) — оператор не пропустит проблему, даже отвернувшись. Дублирует баннеры/трей, не заменяет их. По умолчанию выключено: в зале суда звук может быть неуместен."
+          >
+            <Checkbox
+              checked={settings.ux.sound_alerts.enabled}
+              disabled={disabled}
+              onChange={(e) =>
+                update((d) => { d.ux.sound_alerts.enabled = e.target.checked; })
+              }
+            >
+              Подавать звук при сбоях записи
+            </Checkbox>
+          </LabeledWithTip>
         </Grid>
       </Card>
     </>

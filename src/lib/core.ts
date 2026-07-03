@@ -420,6 +420,61 @@ export function getDiagnostics(): Promise<DiagnosticsInfo> {
   return invoke<DiagnosticsInfo>('diagnostics');
 }
 
+// ── Проверка перед заседанием (этап 10.6: ipc::selftest_cmds) ─────────────────
+
+/** Статус одной позиции self-test. `warn` не блокирует старт, `fail` — блокирует. */
+export type CheckStatus = 'ok' | 'warn' | 'fail';
+
+/**
+ * Действие «Исправить» для не-ok позиции (UI мапит на навигацию). `undefined` —
+ * исправлять нечего (например, освободить место — вне приложения).
+ */
+export type SelfTestFix = 'open_settings' | 'open_record' | 'open_login';
+
+/** Одна позиция чек-листа self-test (ipc::selftest_cmds::SelfTestCheck). */
+export interface SelfTestCheck {
+  id: string;
+  label: string;
+  status: CheckStatus;
+  detail: string;
+  fix?: SelfTestFix | null;
+}
+
+/** Итог self-test: чек-лист + агрегат «можно начинать» (нет ни одного fail). */
+export interface SelfTestReport {
+  checks: SelfTestCheck[];
+  ready: boolean;
+}
+
+/** Запустить проверку перед заседанием (устройство/диск/сервер/вход/незавершённые). */
+export function runSelfTest(): Promise<SelfTestReport> {
+  return invoke<SelfTestReport>('self_test');
+}
+
+// ── Карточка сессии (этап 10.6: ipc::query_cmds::session_detail) ─────────────
+
+/** Детальная карточка сессии (read-only, без аудит-побочек). */
+export interface SessionDetail extends SessionRecord {
+  segment_count: number;
+  duration_seconds: number;
+  integrity: IntegritySummary;
+  events: EventRecord[];
+  markers: MarkerState[];
+  role_spans: RoleSpanState[];
+  /** Свободный комментарий оператора, если задан. */
+  comment: string | null;
+}
+
+/** Детальная карточка сессии по каталогу `dir` (метки/события/целостность/коммент). */
+export function getSessionDetail(dir: string): Promise<SessionDetail> {
+  return invoke<SessionDetail>('session_detail', { dir });
+}
+
+/** Сохранить/очистить (пустая строка) свободный комментарий оператора к сессии. */
+export function setSessionComment(dir: string, text: string): Promise<void> {
+  return invoke('set_session_comment', { dir, text });
+}
+
 // ── Проигрыватель (этап 10.1: ipc::player_cmds) ─────────────────────────────
 
 /** Дорожка сессии в ответе `player_open_session` (список/выбор дорожки). */

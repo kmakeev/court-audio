@@ -36,6 +36,18 @@ vi.mock('@tauri-apps/api/event', async () => {
   };
 });
 
+// Мок оконного API Tauri (этап 10.6): защита закрытия окна с идущей записью
+// использует `getCurrentWindow().onCloseRequested`. В jsdom нативного окна нет —
+// подставляем no-op, чтобы компонентные тесты не падали на импорте.
+vi.mock('@tauri-apps/api/window', async () => {
+  return {
+    getCurrentWindow: () => ({
+      onCloseRequested: (_cb: unknown) => Promise.resolve(() => {}),
+      destroy: () => Promise.resolve(),
+    }),
+  };
+});
+
 beforeEach(() => {
   resetTauriMock();
 });

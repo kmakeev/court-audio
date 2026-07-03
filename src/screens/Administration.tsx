@@ -273,10 +273,69 @@ export function AdministrationScreen() {
             )}
           </Card>
 
+          <SectionTitle>ОС-интеграция</SectionTitle>
+          <OsIntegrationCard />
+
           <SectionTitle>Журнал изменений настроек</SectionTitle>
           <AuditLog records={audit} />
         </>
       )}
+    </div>
+  );
+}
+
+// ── Рекомендации по интеграции с ОС (этап 10.6) ───────────────────────────────
+// Блокировка сна/гибернации во время записи и автозапуск приложения при входе в
+// систему реализуются средствами ОС при развёртывании (этап 08), а не тумблерами
+// приложения — здесь только платформенные инструкции для администратора. Подробно
+// — docs/os_integration.md.
+
+function OsIntegrationCard() {
+  return (
+    <Card>
+      <BlockHead
+        numeral="OS"
+        title="Сон, гибернация и автозапуск"
+        hint="Настраивается средствами ОС при развёртывании станции (не тумблером приложения). Ниже — что сделать администратору на целевой ОС."
+      />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 12 }}>
+        <OsBlock
+          title="Отключить сон/гибернацию во время работы станции"
+          items={[
+            'Astra Linux SE / РЕД ОС: в systemd отключить цели сна — `sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target`; в настройках рабочего стола выставить «Никогда» для гашения экрана и ухода в сон.',
+            'Windows 10/11: «Электропитание» → схема «Высокая производительность»; «Сон» = «Никогда» (от сети); либо `powercfg /change standby-timeout-ac 0` и `powercfg /change hibernate-timeout-ac 0`.',
+            'Приложение дополнительно предупреждает при попытке закрыть окно во время идущей записи (подтверждение выхода).',
+          ]}
+        />
+        <OsBlock
+          title="Автозапуск приложения при входе в систему"
+          items={[
+            'Astra Linux SE / РЕД ОС: добавить `.desktop`-файл в `~/.config/autostart/` (или системный `/etc/xdg/autostart/`) с `Exec=` на бинарь станции; для киоск-станции — пользовательский `systemd`-юнит `--user`.',
+            'Windows 10/11: ярлык приложения в папке «Автозагрузка» (`shell:startup`) или задача в «Планировщике заданий» с триггером «При входе в систему».',
+            'Выбор «приложение или фоновый сервис-агент» решается при упаковке станции (этап 08) — по умолчанию автозапуск самого приложения.',
+          ]}
+        />
+      </div>
+      <p style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12 }}>
+        Подробные шаги и чек-лист проверки — в документе <span className="num">docs/os_integration.md</span>.
+      </p>
+    </Card>
+  );
+}
+
+function OsBlock({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--ink)', marginBottom: 6 }}>
+        {title}
+      </div>
+      <ul style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.5 }}>
+        {items.map((it, i) => (
+          <li key={i} style={{ marginBottom: 4 }}>
+            {it}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -3,11 +3,13 @@ import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { AppShell } from './shell/AppShell';
 import { RecordScreen } from './screens/Record';
 import { SessionsScreen } from './screens/Sessions';
+import { SessionCardScreen } from './screens/SessionCard';
 import { PlaybackScreen } from './screens/Playback';
 import { ExportScreen } from './screens/Export';
 import { SettingsScreen } from './screens/Settings';
 import { AdministrationScreen } from './screens/Administration';
 import { DiagnosticsScreen } from './screens/Diagnostics';
+import { SetupScreen } from './screens/Setup';
 import { LoginScreen } from './screens/Login';
 import { AuthProvider, useAuth } from './lib/auth-context';
 import { getSettings } from './lib/settings';
@@ -25,11 +27,13 @@ export function App() {
           <Route element={<AppShell />}>
             <Route index element={<RecordScreen />} />
             <Route path="sessions" element={<SessionsScreen />} />
+            <Route path="sessions/:dir" element={<SessionCardScreen />} />
             <Route path="sessions/:dir/listen" element={<PlaybackScreen />} />
             <Route path="sessions/:dir/export" element={<ExportScreen />} />
             <Route path="settings" element={<SettingsScreen />} />
             <Route path="administration" element={<AdministrationScreen />} />
             <Route path="diagnostics" element={<DiagnosticsScreen />} />
+            <Route path="setup" element={<SetupScreen />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Route>

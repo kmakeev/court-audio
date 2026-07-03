@@ -667,6 +667,27 @@ pub struct UiSettings {
     pub compact_overlay: CompactOverlaySettings,
 }
 
+// ── UX-пакет (этап 10.6) ──────────────────────────────────────────────────────
+
+/// `ux.sound_alerts` — опциональный звуковой сигнал при сбоях (обрыв устройства /
+/// критический диск / ошибка выгрузки). `Default` даёт `false`: в зале звук может
+/// быть неуместен (этикет), оператор включает при необходимости. Дублирует, не
+/// заменяет баннеры/трей.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SoundAlertsSettings {
+    /// configuration.md: `ux.sound_alerts.enabled = false`.
+    pub enabled: bool,
+}
+
+/// `ux.*` — UX-пакет (этап 10.6). Блокировка сна/автозапуск — на уровне ОС при
+/// развёртывании (не параметры приложения, см. `docs/os_integration.md`); в
+/// реестре — только опциональный звуковой сигнал.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UxSettings {
+    #[serde(default)]
+    pub sound_alerts: SoundAlertsSettings,
+}
+
 // ── Корневая модель ───────────────────────────────────────────────────────────
 
 /// Полная схема настроек станции. Сериализуется в JSON (файл конфигурации
@@ -698,6 +719,9 @@ pub struct Settings {
     /// Интерфейс и адаптивность (этап 10.5). `#[serde(default)]` на корне уже
     /// покрывает отсутствие ключа в конфигах до 10.5.
     pub ui: UiSettings,
+    /// UX-пакет (этап 10.6). `#[serde(default)]` на корне уже покрывает отсутствие
+    /// ключа в конфигах до 10.6.
+    pub ux: UxSettings,
 }
 
 #[cfg(test)]
@@ -760,6 +784,17 @@ mod tests {
         // Интерфейс и адаптивность (этап 10.5).
         assert!(s.ui.hall_mode.enabled);
         assert!(!s.ui.compact_overlay.enabled);
+        // UX-пакет (этап 10.6): звуковой сигнал по умолчанию выключен.
+        assert!(!s.ux.sound_alerts.enabled);
+    }
+
+    #[test]
+    fn pre_10_6_json_without_ux_key_loads_defaults() {
+        // Конфиг до этапа 10.6 не содержит ключа `ux`: должен грузиться и
+        // получать дефолты реестра (аддитивность через `#[serde(default)]`).
+        let back: Settings = serde_json::from_str("{}").expect("deserialize empty");
+        assert_eq!(back.ux, UxSettings::default());
+        assert!(!back.ux.sound_alerts.enabled);
     }
 
     #[test]

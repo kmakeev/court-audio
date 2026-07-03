@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { BlockHead, Button, Card, NEUTRAL_BTN, screenStackStyle, Select, Tag } from '../design';
 import {
   closePlaybackSession,
@@ -24,9 +24,18 @@ import { getSettings, type Settings } from '../lib/settings';
 // списка сессий («Сессии»). Вся дешифровка/склейка/вывод звука — в ядре
 // (player_cmds); здесь только команды и отображение позиции/меток.
 
-// Одинаковый размер кнопки play/pause независимо от варианта DS (у
-// primary/secondary разная высота) — иначе кнопка «прыгает» при переключении.
-const TRANSPORT_BTN: CSSProperties = { height: 44, minWidth: 140, justifyContent: 'center' };
+// Высота всех кнопок ряда транспорта: у DS primary=44/secondary=38, поэтому в
+// одном ряду они бы не выровнялись. Приводим все кнопки ряда к общей высоте.
+const TRANSPORT_H = 44;
+// Play/pause: фиксированная высота + мин. ширина (чтобы кнопка не «прыгала» при
+// смене текста «Играть»↔«Пауза» и не сдвигала соседей).
+const TRANSPORT_BTN: CSSProperties = {
+  height: TRANSPORT_H,
+  minWidth: 140,
+  justifyContent: 'center',
+};
+// Кнопки перемотки: та же высота ряда, нейтральный вид, естественная ширина.
+const TRANSPORT_SEEK: CSSProperties = { ...NEUTRAL_BTN, height: TRANSPORT_H };
 // Шаг громкости по стрелкам ↑/↓ — только UX-косметика (не параметр реестра).
 const VOLUME_STEP = 0.05;
 // Высота оглавления, после которой появляется вертикальный скролл (список
@@ -52,7 +61,15 @@ type Item =
 export function PlaybackScreen() {
   const params = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const dir = params.dir ? decodeURIComponent(params.dir) : '';
+
+  // Куда вернуться из проигрывателя: обычно к списку сессий, но при заходе из
+  // мастера первого запуска (этап 10.6) — обратно в мастер на нужный шаг.
+  const returnState =
+    location.state && typeof location.state === 'object'
+      ? (location.state as { returnTo?: string; returnStep?: number })
+      : null;
 
   const [settings, setSettings] = useState<Settings | null>(null);
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
@@ -216,7 +233,19 @@ export function PlaybackScreen() {
     return () => window.removeEventListener('keydown', onKey);
   }, [playing, positionMs, durationMs, volume, seekStepMs, onPlay, onPause, onSeekMs, onVolumeChange]);
 
-  const backButton = (
+  const backButton = returnState?.returnTo ? (
+    <Button
+      variant="secondary"
+      style={NEUTRAL_BTN}
+      onClick={() =>
+        navigate(returnState.returnTo!, {
+          state: returnState.returnStep != null ? { step: returnState.returnStep } : undefined,
+        })
+      }
+    >
+      ← К мастеру
+    </Button>
+  ) : (
     <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => navigate('/sessions')}>
       ← К сессиям
     </Button>
@@ -365,14 +394,14 @@ export function PlaybackScreen() {
           )}
           <Button
             variant="secondary"
-            style={NEUTRAL_BTN}
+            style={TRANSPORT_SEEK}
             onClick={() => onSeekMs(positionMs - seekStepMs)}
           >
             ◀◀ {Math.round(seekStepMs / 1000)} с
           </Button>
           <Button
             variant="secondary"
-            style={NEUTRAL_BTN}
+            style={TRANSPORT_SEEK}
             onClick={() => onSeekMs(Math.min(durationMs, positionMs + seekStepMs))}
           >
             {Math.round(seekStepMs / 1000)} с ▶▶
@@ -383,6 +412,7 @@ export function PlaybackScreen() {
               ariaLabel="Скорость воспроизведения"
               value={String(rate)}
               onChange={(v) => onRateChange(Number(v))}
+              triggerStyle={{ minHeight: TRANSPORT_H }}
               options={(settings?.player.playback_rates ?? [1]).map((r) => ({
                 value: String(r),
                 label: `${r}×`,
@@ -409,6 +439,7 @@ export function PlaybackScreen() {
               <Select
                 ariaLabel="Дорожка"
                 value={selectorValue}
+                triggerStyle={{ minHeight: TRANSPORT_H }}
                 onChange={(v) =>
                   onSelectTrack(
                     v === 'mix'

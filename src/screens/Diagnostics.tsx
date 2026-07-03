@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
-import { BlockHead, Card, InfoTip, Skeleton, Tag } from '../design';
+import { useNavigate } from 'react-router-dom';
+import { BlockHead, Button, Card, InfoTip, NEUTRAL_BTN, Skeleton, Tag } from '../design';
+import { SelfTestPanel } from '../components/SelfTest';
 import {
   getDiagnostics,
   type DiagnosticsInfo,
@@ -43,6 +45,7 @@ type Load =
   | { kind: 'error'; message: string };
 
 export function DiagnosticsScreen() {
+  const navigate = useNavigate();
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
 
   useEffect(() => {
@@ -68,7 +71,15 @@ export function DiagnosticsScreen() {
             <Tag tone="accent">Ошибка: {load.message}</Tag>
           </div>
         )}
+        <div style={{ marginTop: 12 }}>
+          <Button variant="secondary" style={NEUTRAL_BTN} onClick={() => navigate('/setup')}>
+            Мастер первого запуска
+          </Button>
+        </div>
       </Card>
+
+      {/* Проверка перед заседанием (этап 10.6) — доступна и с «Диагностики». */}
+      <SelfTestPanel numeral="✓" />
 
       {load.kind === 'loading' && (
         <Card>

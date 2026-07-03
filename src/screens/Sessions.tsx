@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BlockHead, Button, Card, EmptyState, screenStackStyle, Skeleton, Tag } from '../design';
+import { BlockHead, Button, Card, EmptyState, Field, fieldCaptionStyle, NEUTRAL_BTN, Select, screenStackStyle, Skeleton, Tag } from '../design';
 import {
   formatAdjudicationRef,
   listSessions,
@@ -10,10 +10,36 @@ import {
   type SessionView,
   type UploadStatus,
 } from '../lib/core';
+import {
+  querySessions,
+  type SortOrder,
+  type UploadFilter,
+} from '../lib/session-filter';
 
-// Экран «Сессии» (этап 04 + 06). Список локальных записей из манифеста (этап 03):
-// дата, длительность, привязка к делу, статус и прогресс выгрузки в ex_system.
-// Управление выгрузкой (этап 06): повтор/пауза/продолжение — команды ipc::sync_cmds.
+// Экран «Сессии» (этап 04 + 06 + 10.6). Список локальных записей из манифеста
+// (этап 03): дата, длительность, привязка к делу, статус и прогресс выгрузки.
+// Поиск/фильтры/сортировка/пагинация (этап 10.6) — чистые хелперы `session-filter`
+// поверх уже загруженного списка. Управление выгрузкой (этап 06) — ipc::sync_cmds;
+// карточка сессии (10.6) — маршрут `/sessions/:dir`.
+
+// Сколько записей на страницу (презентация, не бизнес-параметр реестра).
+const PAGE_SIZE = 10;
+
+// Человекочитаемые ярлыки фильтра по статусу выгрузки.
+const UPLOAD_FILTER_LABELS: Record<UploadFilter, string> = {
+  all: 'Любой статус',
+  pending: 'Готова к выгрузке',
+  uploading: 'Выгружается',
+  uploaded: 'Выгружена',
+  confirmed: 'Подтверждена',
+  failed: 'Ошибка выгрузки',
+  integrity_failed: 'Ошибка целостности',
+};
+
+const SORT_LABELS: Record<SortOrder, string> = {
+  newest: 'Сначала новые',
+  oldest: 'Сначала старые',
+};
 
 type Tone = 'default' | 'accent' | 'gold' | 'green';
 
@@ -83,6 +109,12 @@ export function SessionsScreen() {
   const [load, setLoad] = useState<Load>({ kind: 'loading' });
   const [busy, setBusy] = useState<string | null>(null);
 
+  // Поиск/фильтры/сортировка/пагинация (этап 10.6) — состояние UI.
+  const [search, setSearch] = useState('');
+  const [upload, setUpload] = useState<UploadFilter>('all');
+  const [sort, setSort] = useState<SortOrder>('newest');
+  const [page, setPage] = useState(0);
+
   const reload = useCallback(() => {
     let active = true;
     listSessions()
@@ -94,6 +126,16 @@ export function SessionsScreen() {
   }, []);
 
   useEffect(() => reload(), [reload]);
+
+  // Смена критериев сбрасывает на первую страницу (иначе можно «зависнуть» на
+  // несуществующей странице после сужения выборки).
+  useEffect(() => setPage(0), [search, upload, sort]);
+
+  const allSessions = load.kind === 'ready' ? load.sessions : [];
+  const result = useMemo(
+    () => querySessions(allSessions, { search, upload, sort }, page, PAGE_SIZE),
+    [allSessions, search, upload, sort, page],
+  );
 
   const runAction = useCallback(
     async (id: string, action: () => Promise<void>) => {
@@ -123,6 +165,46 @@ export function SessionsScreen() {
             <Tag tone="accent">Ошибка: {load.message}</Tag>
           </div>
         )}
+        {/* Поиск, фильтр и сортировка (этап 10.6). */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: 12,
+            marginTop: 16,
+          }}
+        >
+          <Field
+            label="Поиск по № дела / ФИО"
+            value={search}
+            placeholder="например: 1-100 или Иванов"
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span style={fieldCaptionStyle}>Статус выгрузки</span>
+            <Select
+              ariaLabel="Фильтр по статусу выгрузки"
+              value={upload}
+              onChange={(v) => setUpload(v as UploadFilter)}
+              options={(Object.keys(UPLOAD_FILTER_LABELS) as UploadFilter[]).map((k) => ({
+                value: k,
+                label: UPLOAD_FILTER_LABELS[k],
+              }))}
+            />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <span style={fieldCaptionStyle}>Сортировка</span>
+            <Select
+              ariaLabel="Сортировка сессий"
+              value={sort}
+              onChange={(v) => setSort(v as SortOrder)}
+              options={(Object.keys(SORT_LABELS) as SortOrder[]).map((k) => ({
+                value: k,
+                label: SORT_LABELS[k],
+              }))}
+            />
+          </label>
+        </div>
       </Card>
 
       {load.kind === 'loading' && (
@@ -139,8 +221,16 @@ export function SessionsScreen() {
         />
       )}
 
+      {load.kind === 'ready' && load.sessions.length > 0 && result.items.length === 0 && (
+        <EmptyState
+          icon="icon-step-case"
+          title="Ничего не найдено"
+          description="Под текущий поиск/фильтр записей нет. Измените запрос или сбросьте фильтр."
+        />
+      )}
+
       {load.kind === 'ready' &&
-        load.sessions.map((s) => {
+        result.items.map((s) => {
           const sv = deriveStatus(s);
           const actions = uploadActions(s);
           const isBusy = busy === s.dir;
@@ -174,6 +264,12 @@ export function SessionsScreen() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <Button
+                    variant="mini"
+                    onClick={() => navigate(`/sessions/${encodeURIComponent(s.dir)}`)}
+                  >
+                    Карточка
+                  </Button>
                   {canListen(s) && (
                     <Button
                       variant="mini"
@@ -223,6 +319,39 @@ export function SessionsScreen() {
             </Card>
           );
         })}
+
+      {/* Пагинация (этап 10.6): показываем, только если страниц больше одной. */}
+      {load.kind === 'ready' && result.pageCount > 1 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Button
+            variant="secondary"
+            style={NEUTRAL_BTN}
+            disabled={result.page === 0}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+          >
+            ← Назад
+          </Button>
+          <span className="num" style={{ fontSize: 13, color: 'var(--ink-soft)' }}>
+            Страница {result.page + 1} из {result.pageCount} · всего {result.total}
+          </span>
+          <Button
+            variant="secondary"
+            style={NEUTRAL_BTN}
+            disabled={result.page >= result.pageCount - 1}
+            onClick={() => setPage((p) => Math.min(result.pageCount - 1, p + 1))}
+          >
+            Вперёд →
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
