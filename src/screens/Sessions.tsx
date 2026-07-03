@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BlockHead, Button, Card, EmptyState, Skeleton, Tag } from '../design';
+import { BlockHead, Button, Card, EmptyState, screenStackStyle, Skeleton, Tag } from '../design';
 import {
   formatAdjudicationRef,
   listSessions,
@@ -111,7 +111,7 @@ export function SessionsScreen() {
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+    <div style={screenStackStyle(880)}>
       <Card>
         <BlockHead
           numeral="02"

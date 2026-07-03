@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { BlockHead, Button, Card, Select, Tag } from '../design';
+import { BlockHead, Button, Card, NEUTRAL_BTN, screenStackStyle, Select, Tag } from '../design';
 import {
   closePlaybackSession,
   formatAdjudicationRef,
@@ -24,7 +24,6 @@ import { getSettings, type Settings } from '../lib/settings';
 // списка сессий («Сессии»). Вся дешифровка/склейка/вывод звука — в ядре
 // (player_cmds); здесь только команды и отображение позиции/меток.
 
-const NEUTRAL_BTN = { color: 'var(--ink)', borderColor: 'var(--ink-soft)' } as const;
 // Одинаковый размер кнопки play/pause независимо от варианта DS (у
 // primary/secondary разная высота) — иначе кнопка «прыгает» при переключении.
 const TRANSPORT_BTN: CSSProperties = { height: 44, minWidth: 140, justifyContent: 'center' };
@@ -225,7 +224,7 @@ export function PlaybackScreen() {
 
   if (load.kind === 'loading') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+      <div style={screenStackStyle(880)}>
         <div>{backButton}</div>
         <Card>
           <BlockHead numeral="▶" title="Прослушивание" hint="Загрузка сессии…" />
@@ -236,7 +235,7 @@ export function PlaybackScreen() {
 
   if (load.kind === 'error') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+      <div style={screenStackStyle(880)}>
         <div>{backButton}</div>
         <Card>
           <BlockHead numeral="▶" title="Прослушивание" />

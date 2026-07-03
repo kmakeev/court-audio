@@ -632,6 +632,41 @@ pub struct AdminSettings {
     pub pin: AdminPinSettings,
 }
 
+// ── Интерфейс и адаптивность (этап 10.5) ──────────────────────────────────────
+
+/// `ui.hall_mode` — «режим зала» (крупный статус, читаемый с нескольких метров).
+/// configuration.md: `ui.hall_mode.enabled = true`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HallModeSettings {
+    pub enabled: bool,
+}
+
+impl Default for HallModeSettings {
+    fn default() -> Self {
+        // configuration.md: ui.hall_mode.enabled = true
+        Self { enabled: true }
+    }
+}
+
+/// `ui.compact_overlay` — компактное окно статуса «поверх всех окон» (Tauri
+/// multi-window). configuration.md: `ui.compact_overlay.enabled = false` (опция).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CompactOverlaySettings {
+    /// `Default` даёт `false` — оверлей выключен по умолчанию (опция зала).
+    pub enabled: bool,
+}
+
+/// `ui.*` — параметры интерфейса и адаптивности (этап 10.5). Брейкпоинты сетки и
+/// косметика метров — layout-константы кода (не бизнес-параметры реестра); здесь
+/// только доступность режима зала и компакт-оверлея.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UiSettings {
+    #[serde(default)]
+    pub hall_mode: HallModeSettings,
+    #[serde(default)]
+    pub compact_overlay: CompactOverlaySettings,
+}
+
 // ── Корневая модель ───────────────────────────────────────────────────────────
 
 /// Полная схема настроек станции. Сериализуется в JSON (файл конфигурации
@@ -660,6 +695,9 @@ pub struct Settings {
     /// Разграничение доступа оператор/админ (этап 10.4). `#[serde(default)]` на
     /// корне уже покрывает отсутствие ключа в конфигах до 10.4.
     pub admin: AdminSettings,
+    /// Интерфейс и адаптивность (этап 10.5). `#[serde(default)]` на корне уже
+    /// покрывает отсутствие ключа в конфигах до 10.5.
+    pub ui: UiSettings,
 }
 
 #[cfg(test)]
@@ -719,6 +757,19 @@ mod tests {
         // Администрирование (этап 10.4).
         assert!(s.admin.pin.required);
         assert_eq!(s.admin.pin.min_length, 4);
+        // Интерфейс и адаптивность (этап 10.5).
+        assert!(s.ui.hall_mode.enabled);
+        assert!(!s.ui.compact_overlay.enabled);
+    }
+
+    #[test]
+    fn pre_10_5_json_without_ui_key_loads_defaults() {
+        // Конфиг до этапа 10.5 не содержит ключа `ui`: должен грузиться и
+        // получать дефолты реестра (аддитивность через `#[serde(default)]`).
+        let back: Settings = serde_json::from_str("{}").expect("deserialize empty");
+        assert_eq!(back.ui, UiSettings::default());
+        assert!(back.ui.hall_mode.enabled);
+        assert!(!back.ui.compact_overlay.enabled);
     }
 
     #[test]

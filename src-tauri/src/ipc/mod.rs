@@ -21,6 +21,7 @@ pub mod player_cmds;
 pub mod query_cmds;
 pub mod settings_gate;
 pub mod sync_cmds;
+pub mod ui_cmds;
 
 /// Имя файла настроек в каталоге конфигурации приложения.
 const SETTINGS_FILE: &str = "settings.json";

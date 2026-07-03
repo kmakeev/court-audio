@@ -186,6 +186,60 @@ struct PlayerPositionEvent {
 }
 
 const EVENT_PLAYER_POSITION: &str = "player_position";
+/// Событие закрытия сессии проигрывателя — чтобы внешние индикаторы (компакт-
+/// оверлей, этап 10.5) узнали, что воспроизведение больше не активно (событие
+/// `player_position` о закрытии не сообщает).
+const EVENT_PLAYER_CLOSED: &str = "player_closed";
+
+/// Снимок состояния проигрывателя для окон/индикаторов, открывшихся уже во время
+/// воспроизведения (этап 10.5). `player_position` эмитится только во время игры/
+/// сика — новый слушатель без этого снимка не знал бы текущее состояние.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayerStatusView {
+    /// Открыта ли сессия в проигрывателе (есть чем управлять).
+    pub active: bool,
+    pub position_ms: u64,
+    pub duration_ms: u64,
+    /// `playing` / `paused` / `stopped` (см. `PlayerPositionEvent`).
+    pub state: &'static str,
+}
+
+/// Текущее состояние проигрывателя (для восстановления статуса в окне/оверлее,
+/// открывшемся во время воспроизведения). Сессия не открыта → `active=false`.
+#[tauri::command]
+pub fn player_status(state: State<'_, PlayerState>) -> Result<PlayerStatusView, String> {
+    let guard = state
+        .0
+        .lock()
+        .map_err(|_| "состояние плеера повреждено".to_string())?;
+    let Some(active) = guard.as_ref() else {
+        return Ok(PlayerStatusView {
+            active: false,
+            position_ms: 0,
+            duration_ms: 0,
+            state: "stopped",
+        });
+    };
+    let played = active
+        .engine
+        .as_ref()
+        .map(|e| e.played_frames.load(Ordering::Relaxed))
+        .unwrap_or(0);
+    let total_frames = active
+        .engine
+        .as_ref()
+        .map(|e| e.total_frames)
+        .unwrap_or_else(|| selected_total_frames(active));
+    Ok(PlayerStatusView {
+        active: true,
+        position_ms: frames_to_ms(
+            active.seek_base_frame.saturating_add(played),
+            active.sample_rate_hz,
+        ),
+        duration_ms: frames_to_ms(total_frames, active.sample_rate_hz),
+        state: playing_state_code(active.machine.state()),
+    })
+}
 
 /// Открыть сессию `dir` в проигрывателе: реконсилировать манифест, собрать
 /// таймлайны дорожек, резолвить ключ шифрования (если включено), загрузить
@@ -310,6 +364,12 @@ pub fn player_open_session(
     }
     *guard = Some(active);
 
+    // Снимок позиции для внешних индикаторов (компакт-оверлей): сообщает, что
+    // сессия открыта, её длительность и позицию 0 (ещё не играли).
+    if let Some(a) = guard.as_ref() {
+        emit_position_now(&app, a);
+    }
+
     Ok(info)
 }
 
@@ -363,7 +423,7 @@ pub fn player_play(app: AppHandle, state: State<'_, PlayerState>) -> Result<(), 
 
 /// Приостановить воспроизведение (позиция сохраняется).
 #[tauri::command]
-pub fn player_pause(state: State<'_, PlayerState>) -> Result<(), String> {
+pub fn player_pause(app: AppHandle, state: State<'_, PlayerState>) -> Result<(), String> {
     let mut guard = state
         .0
         .lock()
@@ -381,6 +441,9 @@ pub fn player_pause(state: State<'_, PlayerState>) -> Result<(), String> {
             .apply(PlayerEvent::Pause)
             .map_err(|e| e.to_string())?;
     }
+    // Пауза не эмитит периодических событий — сообщаем новое состояние сразу,
+    // чтобы внешние индикаторы (компакт-оверлей) не «застряли» на playing.
+    emit_position_now(&app, active);
     Ok(())
 }
 
@@ -470,7 +533,7 @@ pub fn player_set_volume(state: State<'_, PlayerState>, volume: f32) -> Result<(
 /// Закрыть сессию в проигрывателе (уход с экрана) — останавливает
 /// воспроизведение и освобождает аудио-устройство вывода.
 #[tauri::command]
-pub fn player_close(state: State<'_, PlayerState>) -> Result<(), String> {
+pub fn player_close(app: AppHandle, state: State<'_, PlayerState>) -> Result<(), String> {
     let mut guard = state
         .0
         .lock()
@@ -478,6 +541,9 @@ pub fn player_close(state: State<'_, PlayerState>) -> Result<(), String> {
     if let Some(mut active) = guard.take() {
         teardown(&mut active);
     }
+    // Оповестить внешние индикаторы (компакт-оверлей), что управлять больше
+    // нечем — событие позиции о закрытии не сообщает.
+    let _ = app.emit(EVENT_PLAYER_CLOSED, ());
     Ok(())
 }
 

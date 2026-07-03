@@ -501,6 +501,24 @@ export function onPlayerPosition(
   return listen<PlayerPositionEvent>('player_position', (ev) => cb(ev.payload));
 }
 
+/** Снимок состояния проигрывателя (для окна/оверлея, открытого во время игры). */
+export interface PlayerStatus {
+  active: boolean;
+  position_ms: number;
+  duration_ms: number;
+  state: 'playing' | 'paused' | 'stopped';
+}
+
+/** Текущее состояние проигрывателя (сессия не открыта → `active=false`). */
+export function getPlayerStatus(): Promise<PlayerStatus> {
+  return invoke<PlayerStatus>('player_status');
+}
+
+/** Подписка на закрытие сессии проигрывателя (`player_closed`). */
+export function onPlayerClosed(cb: () => void): Promise<UnlistenFn> {
+  return listen('player_closed', () => cb());
+}
+
 // ── Экспорт (этап 10.2: ipc::export_cmds) ────────────────────────────────────
 
 /** Дорожка сессии для шага «Состав» мастера экспорта. */
@@ -606,6 +624,30 @@ export function onExportProgress(
   cb: (e: ExportProgressEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<ExportProgressEvent>('export_progress', (ev) => cb(ev.payload));
+}
+
+// ── Компакт-оверлей статуса (этап 10.5, ipc::ui_cmds) ────────────────────────
+
+/**
+ * Открыть компакт-окно статуса «поверх всех окон». Ядро проверяет
+ * `ui.compact_overlay.enabled` — при выключенной опции возвращает `Err`.
+ */
+export function openCompactOverlay(): Promise<void> {
+  return invoke('open_compact_overlay');
+}
+
+/** Закрыть компакт-окно статуса (вызывается и из самого оверлея). */
+export function closeCompactOverlay(): Promise<void> {
+  return invoke('close_compact_overlay');
+}
+
+/**
+ * Подписка на событие `settings_saved` (ядро эмитит после успешного сохранения
+ * настроек). UI-элементы, читающие реестр (флаги `ui.*` в оболочке и т.п.),
+ * перечитывают его без перезапуска приложения.
+ */
+export function onSettingsSaved(cb: () => void): Promise<UnlistenFn> {
+  return listen('settings_saved', () => cb());
 }
 
 // ── Типизированные подписки на события ───────────────────────────────────────

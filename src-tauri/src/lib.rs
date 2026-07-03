@@ -15,6 +15,52 @@ pub mod settings;
 pub mod store;
 pub mod sync;
 
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{Listener, Manager};
+
+/// Собрать системный трей со статусом записи (этап 10.5). Иконка — штатная иконка
+/// окна; tooltip меняется по событию `capture_state`. Меню: показать окно / выход.
+/// Деривация подписи — чистая [`ipc::ui_cmds::tray_tooltip`] (покрыта тестом);
+/// здесь только нативная обвязка (в CI без дисплея не исполняется).
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Показать окно", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    let mut builder = TrayIconBuilder::with_id("main")
+        .tooltip(ipc::ui_cmds::tray_tooltip("idle"))
+        .menu(&menu)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+
+    // Обновление подписи трея по состоянию записи: слушаем `capture_state` и
+    // переносим состояние в tooltip (запись видна из трея с любого экрана).
+    let handle = app.handle().clone();
+    app.listen("capture_state", move |event| {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+            if let Some(state) = v.get("state").and_then(|s| s.as_str()) {
+                if let Some(tray) = handle.tray_by_id("main") {
+                    let _ = tray.set_tooltip(Some(ipc::ui_cmds::tray_tooltip(state)));
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
 /// Точка сборки Tauri-приложения. Регистрирует IPC-команды и запускает окно.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,6 +71,11 @@ pub fn run() {
         .manage(ipc::auth_cmds::AuthState::default())
         .manage(ipc::admin_cmds::AdminState::default())
         .setup(|app| {
+            // Системный трей со статусом записи (этап 10.5). Не критичен для
+            // старта: сбой трея (например, окружение без дисплея) не роняет запуск.
+            if let Err(e) = setup_tray(app) {
+                eprintln!("трей недоступен: {e}");
+            }
             // Фоновый агент выгрузки (этап 06): низкоприоритетный поток, не на
             // горячем пути захвата. Idle, пока не задан sync.server_base_url.
             ipc::sync_cmds::spawn_scheduler(app.handle().clone());
@@ -92,10 +143,13 @@ pub fn run() {
             ipc::player_cmds::player_set_rate,
             ipc::player_cmds::player_set_volume,
             ipc::player_cmds::player_close,
+            ipc::player_cmds::player_status,
             ipc::export_cmds::export_session_info,
             ipc::export_cmds::export_build_package,
             ipc::export_cmds::export_dvd_drive_status,
-            ipc::export_cmds::export_burn_dvd
+            ipc::export_cmds::export_burn_dvd,
+            ipc::ui_cmds::open_compact_overlay,
+            ipc::ui_cmds::close_compact_overlay
         ])
         .run(tauri::generate_context!())
         .expect("ошибка запуска приложения «Аудиопротокол»");

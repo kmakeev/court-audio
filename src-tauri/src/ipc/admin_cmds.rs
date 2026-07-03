@@ -15,7 +15,7 @@
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::ipc::auth_cmds::current_operator_id;
 use crate::ipc::settings_gate::{authorize_save, diff_json, only_operator_changed, SaveDecision};
@@ -125,6 +125,10 @@ pub(crate) fn apply_settings_save(
             record_change(&root, &change).map_err(|e| e.to_string())?;
         }
     }
+
+    // Оповестить UI об изменении настроек: индикаторы/режимы, читающие реестр
+    // (например, флаги `ui.*` в оболочке), должны обновиться без перезапуска.
+    let _ = app.emit("settings_saved", ());
 
     Ok(SaveOutcome::Saved)
 }

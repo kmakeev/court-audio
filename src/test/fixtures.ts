@@ -80,6 +80,10 @@ export function settingsFixture(): Settings {
     admin: {
       pin: { required: true, min_length: 4 },
     },
+    ui: {
+      hall_mode: { enabled: true },
+      compact_overlay: { enabled: false },
+    },
   };
 }
 

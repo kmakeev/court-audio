@@ -129,6 +129,14 @@ export interface AdminSettings {
   pin: { required: boolean; min_length: number };
 }
 
+/** Интерфейс и адаптивность (этап 10.5). Брейкпоинты — layout-константы кода. */
+export interface UiSettings {
+  /** Доступность «режима зала» (крупный статус). */
+  hall_mode: { enabled: boolean };
+  /** Доступность компакт-окна статуса «поверх всех окон». */
+  compact_overlay: { enabled: boolean };
+}
+
 export interface Settings {
   audio: AudioSettings;
   recorder: RecorderSettings;
@@ -143,6 +151,7 @@ export interface Settings {
   player: PlayerSettings;
   export: ExportSettings;
   admin: AdminSettings;
+  ui: UiSettings;
 }
 
 // ── Разграничение доступа (этап 10.4: ipc::admin_cmds) ───────────────────────

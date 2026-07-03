@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BlockHead, Button, Card, Field, Select, Tag } from '../design';
+import { BlockHead, Button, Card, Field, screenStackStyle, Select, Tag } from '../design';
 import { listAudioDevices, type DeviceInfo } from '../lib/core';
 import { getSettings, saveSettings, type Settings } from '../lib/settings';
 import {
@@ -90,7 +90,7 @@ export function SettingsScreen() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 760 }}>
+    <div style={screenStackStyle(760)}>
       <Card>
         <BlockHead
           numeral="03"

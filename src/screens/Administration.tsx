@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BlockHead, Button, Card, Field, Tag } from '../design';
+import { BlockHead, Button, Card, Field, screenStackStyle, Tag } from '../design';
 import { listAudioDevices, type DeviceInfo } from '../lib/core';
 import {
   adminLock,
@@ -166,7 +166,7 @@ export function AdministrationScreen() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 760 }}>
+    <div style={screenStackStyle(760)}>
       <Card>
         <BlockHead
           numeral="04"

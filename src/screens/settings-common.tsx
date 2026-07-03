@@ -1,5 +1,21 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
-import { BlockHead, Button, Card, Checkbox, Field, Icon, InfoTip, Select, Tag } from '../design';
+import {
+  BlockHead,
+  Button,
+  Card,
+  Checkbox,
+  Field,
+  fieldCaptionStyle,
+  Icon,
+  InfoTip,
+  NEUTRAL_BTN,
+  Select,
+  Tag,
+} from '../design';
+
+// Нейтральная кнопка — общий паттерн DS; ре-экспорт для экранов, что берут её из
+// этого модуля (Administration и др.).
+export { NEUTRAL_BTN };
 import type { DeviceInfo } from '../lib/core';
 import type { RetentionMode, Settings, TrackConfig } from '../lib/settings';
 
@@ -593,6 +609,42 @@ export function AdminSections({
           />
         </Grid>
       </Card>
+
+      <Card>
+        <BlockHead
+          numeral="I"
+          title="Интерфейс"
+          hint="Режимы отображения статуса записи для зала. Брейкпоинты адаптивной сетки — служебные константы кода, здесь не настраиваются."
+        />
+        <Grid>
+          <LabeledWithTip
+            label="Режим зала"
+            tip="Разрешает разворачивать крупный статус записи (хронометр/состояние/уровень) на весь экран — читается с нескольких метров. Открывается кнопкой в шапке."
+          >
+            <Checkbox
+              checked={settings.ui.hall_mode.enabled}
+              disabled={disabled}
+              onChange={(e) => update((d) => { d.ui.hall_mode.enabled = e.target.checked; })}
+            >
+              Разрешить крупный статус на весь экран
+            </Checkbox>
+          </LabeledWithTip>
+          <LabeledWithTip
+            label="Окно поверх всех окон"
+            tip="Разрешает открыть компактное окно статуса записи, которое остаётся поверх других программ — оператор работает в другом ПО, не теряя контроль записи. По умолчанию выключено."
+          >
+            <Checkbox
+              checked={settings.ui.compact_overlay.enabled}
+              disabled={disabled}
+              onChange={(e) =>
+                update((d) => { d.ui.compact_overlay.enabled = e.target.checked; })
+              }
+            >
+              Разрешить компакт-окно статуса
+            </Checkbox>
+          </LabeledWithTip>
+        </Grid>
+      </Card>
     </>
   );
 }
@@ -728,11 +780,6 @@ function MultichannelCard({
     </Card>
   );
 }
-
-// Нейтральная кнопка на светлой карточке: вариант `secondary` дизайн-системы
-// рассчитан на тёмную панель (светлый текст `--on-dark`), поэтому на бумаге его
-// нужно переопределить под тёмный текст/рамку — иначе кнопка «исчезает».
-export const NEUTRAL_BTN: CSSProperties = { color: 'var(--ink)', borderColor: 'var(--ink-soft)' };
 
 const CONTROL_HEIGHT = 44;
 const selectTriggerStyle: CSSProperties = {
@@ -917,13 +964,7 @@ export function Grid({ children }: { children: ReactNode }) {
   );
 }
 
-const labeledCaptionStyle: CSSProperties = {
-  fontSize: 11,
-  textTransform: 'uppercase',
-  letterSpacing: '0.14em',
-  color: 'var(--muted)',
-  fontWeight: 500,
-};
+const labeledCaptionStyle: CSSProperties = { ...fieldCaptionStyle };
 
 const tracksCaptionStyle: CSSProperties = { ...labeledCaptionStyle };
 

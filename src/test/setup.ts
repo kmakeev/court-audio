@@ -4,6 +4,23 @@ import '@testing-library/jest-dom';
 import { beforeEach, vi } from 'vitest';
 import { resetTauriMock } from './tauriMock';
 
+// jsdom не реализует `window.matchMedia`; минимальный стаб (этап 10.5) — на
+// случай, если компонент/библиотека его вызовет. Адаптивная сетка построена на
+// CSS-медиазапросах (не на JS matchMedia), поэтому смоук-тесты его не читают.
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
+
 vi.mock('@tauri-apps/api/core', async () => {
   const mod = await import('./tauriMock');
   return {

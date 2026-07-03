@@ -1,6 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
-import { BlockHead, Button, Card, CriticalNotice, ProgressBar, Select, Tag } from '../design';
+import {
+  BlockHead,
+  Button,
+  Card,
+  CriticalNotice,
+  fieldCaptionStyle,
+  NEUTRAL_BTN,
+  ProgressBar,
+  screenStackStyle,
+  Select,
+  Tag,
+} from '../design';
+import { CLIP_RATIO, formatClock, FULL_SCALE, toMeterPct } from '../lib/format';
+import {
+  RECORDING_STATUS_LABEL,
+  RECORDING_STATUS_TONE,
+} from '../lib/recording-status';
 import { CasePicker } from '../components/CasePicker';
 import { ConfirmDialog } from '../shell/ConfirmDialog';
 import {
@@ -42,13 +58,8 @@ import { useAuth } from '../lib/auth-context';
 // (этапы 01–03); здесь только команды и отображение событий.
 
 // ── Константы отображения (НЕ бизнес-параметры реестра) ──────────────────────
-// Полная шкала нормированного PCM-уровня: клиппинг при пике у предела сигнала.
-const FULL_SCALE = 1.0;
-// Порог визуальной индикации клиппинга (доля от полной шкалы) — косметика метра.
-const CLIP_RATIO = 0.99;
-// Нижняя граница шкалы метра в дБFS: уровень меряем логарифмически (как все
-// аудио-метры), иначе тихая речь в линейной шкале выглядит «мёртвой». Косметика.
-const METER_FLOOR_DBFS = -60;
+// Косметика метра/хронометра (шкала дБFS, клиппинг, формат времени) вынесена в
+// общий `lib/format` — её переиспользуют шапка, «режим зала» и компакт-оверлей.
 // Такт обновления хронометра — только отображение (раз в секунду).
 const CLOCK_TICK_MS = 1000;
 // Период опроса состояния захвата (живой счётчик сегментов) — отображение.
@@ -61,32 +72,15 @@ const BIND_DEBOUNCE_MS = 500;
 // незаметно. Только отображение, не бизнес-параметр реестра.
 const STOP_INDICATOR_MIN_MS = 700;
 
-// Читаемая нейтральная кнопка на светлом фоне: вариант `secondary` из DS
-// рассчитан на тёмную шапку (светлый текст), поэтому переопределяем токенами.
-const NEUTRAL_BTN: CSSProperties = { color: 'var(--ink)', borderColor: 'var(--ink-soft)' };
-
 interface SessionInfo {
   output_dir: string | null;
   segment_count: number;
 }
 
-type UiState = 'idle' | CaptureStateValue;
-
-const STATUS_LABEL: Record<UiState, string> = {
-  idle: 'Готов к записи',
-  recording: 'Идёт запись',
-  paused: 'Пауза',
-  stopping: 'Остановка…',
-  stopped: 'Запись завершена',
-};
-
-const STATUS_TONE: Record<UiState, 'default' | 'accent' | 'gold' | 'green'> = {
-  idle: 'default',
-  recording: 'accent',
-  paused: 'gold',
-  stopping: 'default',
-  stopped: 'green',
-};
+// Метки/тона статуса записи — общий источник (шапка/режим зала/оверлей).
+type UiState = CaptureStateValue;
+const STATUS_LABEL = RECORDING_STATUS_LABEL;
+const STATUS_TONE = RECORDING_STATUS_TONE;
 
 export function RecordScreen() {
   // Гейт входа (этап 10.3): без вошедшего оператора старт новой сессии закрыт
@@ -373,7 +367,7 @@ export function RecordScreen() {
   const pendingRecoverable = recoverable.filter((r) => r.dir !== activeDir);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+    <div style={screenStackStyle(880)}>
       <Card>
         <BlockHead
           numeral="01"
@@ -861,15 +855,6 @@ function categoryOptions(categories: string[], current: string) {
   return opts;
 }
 
-// Преобразование линейной амплитуды [0..1] в проценты шкалы по дБFS: тихая речь
-// в линейной шкале почти не видна, логарифм делает метр «живым».
-function toMeterPct(v: number): number {
-  if (v <= 0) return 0;
-  const db = 20 * Math.log10(v); // dBFS, ≤ 0
-  const pct = ((db - METER_FLOOR_DBFS) / (0 - METER_FLOOR_DBFS)) * 100;
-  return Math.max(0, Math.min(100, pct));
-}
-
 // ── Пофайловые метры по дорожкам (многоканал — этап 09) ──────────────────────
 // Одноканальная запись (track_id 0) рисуется одним метром без подписи роли.
 function TrackMeters({
@@ -970,14 +955,14 @@ function ChannelMeter({
             overflow: 'hidden',
           }}
         >
-          {/* Заливка RMS */}
+          {/* Заливка RMS (плавность — класс с поддержкой prefers-reduced-motion) */}
           <div
+            className="level-meter-fill"
             style={{
               position: 'absolute',
               inset: 0,
               width: `${rmsPct}%`,
               background: clipping ? 'var(--accent)' : 'var(--green)',
-              transition: 'width 80ms linear',
             }}
           />
           {/* Маркер пика */}
@@ -1002,14 +987,10 @@ function ChannelMeter({
   );
 }
 
-const fieldLabelStyle = {
+const fieldLabelStyle: CSSProperties = {
   display: 'block',
-  fontSize: 11,
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.14em',
-  color: 'var(--muted)',
   marginBottom: 8,
-  fontWeight: 500,
+  ...fieldCaptionStyle,
 };
 
 function isRecordingDot(state: UiState) {
@@ -1040,14 +1021,6 @@ async function runRecover(
   } catch (e) {
     setError(describeError(e));
   }
-}
-
-function formatClock(totalSec: number): string {
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
 function formatHz(hz: number): string {

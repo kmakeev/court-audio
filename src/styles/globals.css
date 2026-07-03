@@ -34,6 +34,26 @@ body {
   font-family: var(--mono);
 }
 
+/* ── Доступность: видимая фокус-обводка (этап 10.5) ───────────────────────────
+   Клавиатурная навигация должна быть видимой на всех интерактивных элементах.
+   `:focus-visible` — только при вводе с клавиатуры (мышь не рисует обводку). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Индикатор уровня сигнала: заливка RMS (этап 10.5) ────────────────────────
+   Плавность вынесена из инлайна экрана «Запись» в класс — чтобы отключаться при
+   `prefers-reduced-motion` (анимация метров раздражает чувствительных к движению). */
+.level-meter-fill {
+  transition: width 80ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .level-meter-fill {
+    transition: none;
+  }
+}
+
 /* ── Тёмная полоса (шапка) — из `.design-sync/ds-extra.css` ──────────────── */
 .bg-dark {
   background-color: var(--dark);
@@ -125,6 +145,123 @@ body {
     animation: none;
     left: 0;
     width: 100%;
+  }
+}
+
+/* ── Адаптивная оболочка приложения (shell/AppShell.tsx, этап 10.5) ───────────
+   Брейкпоинты — layout-константы (не бизнес-параметры реестра): широкий сайдбар
+   → иконочный рельс → бургер, по мере сужения окна. Все размеры/цвета — токены. */
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  background: var(--paper);
+}
+.app-shell__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 28px;
+  border-bottom: 1px solid #000;
+}
+.app-shell__body {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+}
+.app-shell__nav {
+  border-right: 1px solid var(--hairline);
+  background: var(--paper-soft);
+  padding: 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.app-shell__main {
+  padding: 28px 32px;
+  min-width: 0; /* контент не распирает грид — нет горизонтального скролла */
+}
+/* Бургер-кнопка видна только на узких окнах (см. медиазапрос ниже). */
+.app-shell__burger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: transparent;
+  border: 1px solid var(--on-dark-soft, #ffffff55);
+  color: var(--on-dark);
+  cursor: pointer;
+  flex: none;
+}
+
+/* ≤ 900px — сайдбар сворачивается в иконочный рельс: подписи скрыты, колонка
+   узкая; смысл пунктов держат aria-label/title на ссылках. */
+@media (max-width: 900px) {
+  .app-shell__body {
+    grid-template-columns: 64px 1fr;
+  }
+  .app-shell__nav {
+    padding: 20px 8px;
+    align-items: center;
+  }
+  .app-shell__nav-label {
+    display: none;
+  }
+  .app-shell__nav-item {
+    justify-content: center;
+    padding: 10px 0;
+  }
+  .app-shell__main {
+    padding: 24px 20px;
+  }
+}
+
+/* ≤ 640px — рельс уходит в бургер: навигация выезжает оверлеем поверх контента,
+   открывается кнопкой в шапке. Контент занимает всю ширину. */
+@media (max-width: 640px) {
+  .app-shell__body {
+    grid-template-columns: 1fr;
+  }
+  .app-shell__burger {
+    display: inline-flex;
+  }
+  .app-shell__nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 80;
+    width: 232px;
+    padding: 20px 12px;
+    align-items: stretch;
+    box-shadow: 0 0 32px rgba(26, 24, 20, 0.28);
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+  }
+  .app-shell__nav--open {
+    transform: translateX(0);
+  }
+  .app-shell__nav-label {
+    display: inline;
+  }
+  .app-shell__nav-item {
+    justify-content: flex-start;
+    padding: 12px 14px;
+  }
+  /* Затемнение под выехавшей навигацией — клик закрывает. */
+  .app-shell__scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(26, 24, 20, 0.4);
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell__nav {
+    transition: none;
   }
 }
 

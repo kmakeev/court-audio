@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { BlockHead, Button, Card, CriticalNotice, Field, ProgressBar, Select, Tag, type SelectOption } from '../design';
+import { BlockHead, Button, Card, CriticalNotice, Field, NEUTRAL_BTN, ProgressBar, screenStackStyle, Select, Tag, type SelectOption } from '../design';
 import { ConfirmDialog } from '../shell/ConfirmDialog';
 import {
   exportBuildPackage,
@@ -22,8 +22,6 @@ import { getSettings, type Settings } from '../lib/settings';
 // списка сессий. Мастер: состав/формат/назначение → сборка пакета (прогресс)
 // → сводка (файлы, пути, опц. прожиг DVD). Дешифровка/склейка/FLAC/HTML-плеер
 // — в ядре (export_cmds); здесь только выбор параметров и отображение.
-
-const NEUTRAL_BTN = { color: 'var(--ink)', borderColor: 'var(--ink-soft)' } as const;
 
 const FORMAT_OPTIONS: SelectOption[] = [
   { value: 'wav_pcm', label: 'WAV (без потерь)' },
@@ -207,7 +205,7 @@ export function ExportScreen() {
 
   if (load.kind === 'loading') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+      <div style={screenStackStyle(880)}>
         <div>{backButton}</div>
         <Card>
           <BlockHead numeral="↓" title="Экспорт записи" hint="Загрузка сессии…" />
@@ -218,7 +216,7 @@ export function ExportScreen() {
 
   if (load.kind === 'error') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+      <div style={screenStackStyle(880)}>
         <div>{backButton}</div>
         <Card>
           <BlockHead numeral="↓" title="Экспорт записи" />
@@ -233,7 +231,7 @@ export function ExportScreen() {
 
   if (policy === 'forbidden') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+      <div style={screenStackStyle(880)}>
         <div>{backButton}</div>
         <Card>
           <BlockHead
@@ -251,7 +249,7 @@ export function ExportScreen() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 880 }}>
+    <div style={screenStackStyle(880)}>
       <div>{backButton}</div>
 
       <Card>
