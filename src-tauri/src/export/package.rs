@@ -12,7 +12,7 @@ use super::flac::encode_wav_to_flac;
 use super::html::{self, PlayerData, PlayerTrackView};
 use super::manifest::{build_copy_manifest, CopyFileEntry, CopyManifest};
 use super::ExportError;
-use crate::integrity::annotations::{self, AnnotationSnapshot};
+use crate::integrity::annotations::{self, AnnotationSnapshot, MarkerState, RoleSpanState};
 use crate::integrity::hash;
 use crate::player::timeline::Timeline;
 use crate::store::manifest::ManifestStore;
@@ -136,6 +136,15 @@ pub fn build_package(
     progress("annotations", 50);
     let annotation_log = req.store.get_annotations(req.session_id)?;
     let snapshot = annotations::fold(&annotation_log);
+    // Смещения меток/интервалов — по WALL-CLOCK оси сессии (с паузами), а
+    // склеенный файл — по оси ФРЕЙМОВ (паузы вырезаны). Спроецировать одно на
+    // другое, иначе метка после паузы указывает за фактический конец аудио и
+    // плеер упирается в конец потока (R-011). Опора — первая дорожка пакета
+    // (все дорожки сессии стартуют синхронно, общий клок пауз).
+    let snapshot = match reference_timeline(&req.plan) {
+        Some(tl) => project_annotations(&snapshot, tl, req.session_started_at_unix_ms),
+        None => snapshot,
+    };
     write_markers_files(req.package_dir, &snapshot)?;
 
     progress("player", 75);
@@ -178,6 +187,79 @@ pub fn build_package(
         player_path,
         audio_dir,
     })
+}
+
+/// Дорожка-опора для проекции разметки на ось фреймов: первая дорожка пакета
+/// (в `Separate`/`Track` — единственная воспроизводимая на слайдере, в `Mix` —
+/// первая из сводимых; все дорожки сессии синхронны по единому клоку пауз).
+fn reference_timeline(plan: &PackageTrackPlan) -> Option<&Timeline> {
+    match plan {
+        PackageTrackPlan::Separate(tracks) | PackageTrackPlan::Mix(tracks) => {
+            tracks.first().map(|t| &t.timeline)
+        }
+    }
+}
+
+/// Спроецировать смещения меток/интервалов с WALL-CLOCK оси сессии (с паузами)
+/// на ось ФРЕЙМОВ склеенного файла (паузы вырезаны). Единица правды — реальные
+/// сэмплы: [`Timeline::frame_for_marker`] клэмпит метку из паузы к последнему
+/// записанному фрейму, а метку за концом — к последнему фрейму дорожки, поэтому
+/// спроецированное смещение всегда попадает внутрь файла (плеер не встаёт на
+/// конце потока). `offset_samples`/`offset_ms` переписываются на ось файла;
+/// прочие поля (id/категория/автор) сохраняются.
+fn project_annotations(
+    snapshot: &AnnotationSnapshot,
+    timeline: &Timeline,
+    session_started_at_unix_ms: u64,
+) -> AnnotationSnapshot {
+    let rate = timeline.sample_rate_hz;
+    let to_axis = |offset_ms: u64| -> (u64, u64) {
+        let frame = timeline.frame_for_marker(session_started_at_unix_ms, offset_ms);
+        (frame, frames_to_ms(frame, rate))
+    };
+    let markers = snapshot
+        .markers
+        .iter()
+        .map(|m| {
+            let (frame, ms) = to_axis(m.offset_ms);
+            MarkerState {
+                offset_samples: frame,
+                offset_ms: ms,
+                ..m.clone()
+            }
+        })
+        .collect();
+    let role_spans = snapshot
+        .role_spans
+        .iter()
+        .map(|s| {
+            let (start_frame, start_ms) = to_axis(s.start_offset_ms);
+            let (end_frame, end_ms) = match s.end_offset_ms {
+                Some(end) => {
+                    let (f, m) = to_axis(end);
+                    (Some(f), Some(m))
+                }
+                None => (None, None),
+            };
+            RoleSpanState {
+                start_offset_samples: start_frame,
+                start_offset_ms: start_ms,
+                end_offset_samples: end_frame,
+                end_offset_ms: end_ms,
+                ..s.clone()
+            }
+        })
+        .collect();
+    AnnotationSnapshot { markers, role_spans }
+}
+
+/// Число фреймов → миллисекунды (усечение вниз): спроецированный офсет строго
+/// меньше `duration_ms`, поэтому клик по метке не упирается в самый конец файла.
+fn frames_to_ms(frames: u64, sample_rate_hz: u32) -> u64 {
+    if sample_rate_hz == 0 {
+        return 0;
+    }
+    frames * 1000 / sample_rate_hz as u64
 }
 
 /// Если формат — FLAC, перекодировать промежуточный WAV и удалить его;
@@ -485,6 +567,145 @@ mod tests {
 
         let player_html = std::fs::read_to_string(&outcome.player_path).unwrap();
         assert!(player_html.contains("export-data"));
+    }
+
+    #[test]
+    fn build_package_projects_annotations_onto_frame_axis_after_pause() {
+        // R-011: сессия с паузой между сегментами; метка и интервал роли
+        // поставлены ПОСЛЕ паузы (wall-clock офсет много больше фактической
+        // длительности склеенного файла). После проекции их смещения обязаны
+        // попадать ВНУТРЬ файла — иначе переход к ним в плеере упирается в
+        // конец потока и «Играть» перестаёт возобновлять (исходный кейс).
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("sess-pause");
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = ManifestStore::in_memory().unwrap();
+
+        let rate = 8_000u32;
+        let t0 = 1_700_000_000_000u64;
+        store
+            .insert_session(&SessionRecord::new(
+                "sess-pause",
+                dir.to_string_lossy().as_ref(),
+                t0,
+                "station-1",
+                "op-7",
+                rate,
+                1,
+                16,
+            ))
+            .unwrap();
+        store
+            .insert_track(
+                "sess-pause",
+                &TrackRecord {
+                    track_id: 0,
+                    role: "judge".to_string(),
+                    label: "judge".to_string(),
+                    source_device: None,
+                    source_channel: 0,
+                    final_chain_link: None,
+                },
+            )
+            .unwrap();
+
+        // seg1: 1 с в начале сессии; пауза 100 с; seg2: ещё 1 с.
+        let frames = rate as u64; // ровно 1 секунда
+        let samples: Vec<i32> = vec![0; frames as usize];
+        for (index, started) in [(1u32, t0), (2u32, t0 + 101_000)] {
+            let wav_path = dir.join(format!("seg-{index}.wav"));
+            write_wav(&wav_path, rate, &samples);
+            store
+                .append_segment(
+                    "sess-pause",
+                    &SegmentRecord {
+                        track_id: 0,
+                        index,
+                        path: wav_path.to_string_lossy().into_owned(),
+                        started_at_unix_ms: started,
+                        frames,
+                        size_bytes: frames * 2,
+                        sha256: crate::integrity::hash::sha256_file(&wav_path).unwrap(),
+                        chain_link: format!("link{index}"),
+                    },
+                )
+                .unwrap();
+        }
+
+        // Метка на 0.5 с ВНУТРИ второго сегмента и интервал роли, открытый там
+        // же — оба на wall-clock оси (офсеты > 100 с), склеенный файл — 2 с.
+        let marker_wall_ms = 101_500u64;
+        let role_wall_ms = 101_000u64;
+        let mk = |seq: u32, action: AnnotationAction, target: &str, off_ms: u64| AnnotationRecord {
+            seq,
+            action,
+            target_id: target.to_string(),
+            category: Some("Инцидент".to_string()),
+            role: Some("judge".to_string()),
+            comment: None,
+            offset_samples: off_ms * rate as u64 / 1000,
+            offset_ms: off_ms,
+            operator_id: "op-7".to_string(),
+            at_unix_ms: t0 + off_ms,
+            chain_link: String::new(),
+        };
+        let mut recs = vec![
+            mk(1, AnnotationAction::MarkerAdded, "m1", marker_wall_ms),
+            mk(2, AnnotationAction::RoleStarted, "r1", role_wall_ms),
+        ];
+        let chain = build_annotation_chain(&recs);
+        for (r, link) in recs.iter_mut().zip(chain) {
+            r.chain_link = link;
+        }
+        for r in &recs {
+            store.append_annotation("sess-pause", r).unwrap();
+        }
+
+        let segments = store.get_segments("sess-pause").unwrap();
+        let timeline = Timeline::build(&segments, 0, rate);
+        let out_dir = tmp.path().join("export-out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let req = BuildRequest {
+            store: &store,
+            session_id: "sess-pause",
+            package_dir: &out_dir,
+            key: None,
+            plan: PackageTrackPlan::Separate(vec![PlannedTrack {
+                track_id: 0,
+                role: "judge".to_string(),
+                label: "judge".to_string(),
+                timeline,
+            }]),
+            format: PackageFormat::WavPcm,
+            segment_hash: "sha256",
+            hash_chain: true,
+            operator_id: "op-7",
+            exported_at_unix_ms: t0 + 200_000,
+            composition_detail: serde_json::json!({"kind": "all_tracks"}),
+            session_started_at_unix_ms: t0,
+            adjudication_ref: None,
+            seek_step_seconds: 15.0,
+            playback_rates: vec![1.0],
+        };
+        build_package(req, |_, _| {}).unwrap();
+
+        // Склеенный файл непрерывен и длится ровно суммарные сэмплы (2 с).
+        let wav = out_dir.join("audio/judge.wav");
+        let joined = hound::WavReader::open(&wav).unwrap();
+        assert_eq!(joined.duration(), 2 * frames as u32);
+        let duration_ms = 2 * frames * 1000 / rate as u64; // 2000
+
+        // markers.json несёт спроецированные (ось файла) смещения — внутри файла.
+        let snap: AnnotationSnapshot =
+            serde_json::from_str(&std::fs::read_to_string(out_dir.join("markers.json")).unwrap())
+                .unwrap();
+        // 0.5 с во втором сегменте = 1.5 с на оси файла (первая 1 с + 0.5 с).
+        assert_eq!(snap.markers[0].offset_ms, 1_500);
+        assert!(snap.markers[0].offset_ms < duration_ms);
+        // Начало интервала = стык на 1.0 с оси файла (не 101 с wall-clock).
+        assert_eq!(snap.role_spans[0].start_offset_ms, 1_000);
+        assert!(snap.role_spans[0].start_offset_ms < duration_ms);
     }
 
     #[test]

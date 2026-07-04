@@ -270,7 +270,7 @@
     audio.src = tracks[i].file;
     audio.currentTime = 0;
     audio.load();
-    if (wasPlaying) { audio.play().catch(function () {}); }
+    if (wasPlaying) { resumePlayback(); }
   }
   if (tracks.length > 1) {
     document.getElementById('track-dropdown').style.display = '';
@@ -347,7 +347,7 @@
     }
     btn.addEventListener('click', function () {
       seekTo(item.offsetMs);
-      audio.play().catch(function () {});
+      resumePlayback();
     });
     li.appendChild(btn);
     toc.appendChild(li);
@@ -417,11 +417,48 @@
     playBtn.textContent = playing ? '❚❚ Пауза' : '▶ Играть';
     playBtn.classList.toggle('primary', !playing);
   }
-  playBtn.addEventListener('click', function () {
-    if (audio.paused) { audio.play().catch(function () {}); } else { audio.pause(); }
-  });
+
+  // Намерение оператора (play/pause) и защита от «немого» стопа потока.
+  // Симптом R-011: после перехода к метке поток встаёт (stalled/waiting) или
+  // упирается в конец файла, play() резолвится, а позиция не движется —
+  // «Играть» будто не работает. Поэтому «Играть» ВСЕГДА возобновляет с
+  // текущей позиции, а на застревание отвечаем повторной установкой позиции
+  // (перезапуск конвейера декодирования у медиаэлемента).
+  var wantPlaying = false;
+  var stallNudged = false;
+  function resumePlayback() {
+    wantPlaying = true;
+    var p = audio.play();
+    if (p && typeof p.catch === 'function') { p.catch(function () {}); }
+  }
+  function pausePlayback() {
+    wantPlaying = false;
+    audio.pause();
+  }
+  function togglePlayback() {
+    if (audio.paused) { resumePlayback(); } else { pausePlayback(); }
+  }
+  function recoverFromStall() {
+    if (!wantPlaying || stallNudged) { return; }
+    stallNudged = true; // один толчок на эпизод застревания (сброс при движении)
+    var t = audio.currentTime;
+    try { audio.currentTime = t; } catch (e) { /* позиция вне буфера — игнор */ }
+    var p = audio.play();
+    if (p && typeof p.catch === 'function') { p.catch(function () {}); }
+  }
+
+  playBtn.addEventListener('click', togglePlayback);
   audio.addEventListener('play', function () { setPlayingUi(true); });
   audio.addEventListener('pause', function () { setPlayingUi(false); });
+  audio.addEventListener('playing', function () { stallNudged = false; });
+  audio.addEventListener('stalled', recoverFromStall);
+  audio.addEventListener('waiting', recoverFromStall);
+  audio.addEventListener('ended', function () {
+    // Достигнут конец файла — не «немой» стоп: сбрасываем намерение и UI,
+    // следующее «Играть» повторно проиграет с текущей позиции.
+    wantPlaying = false;
+    setPlayingUi(false);
+  });
   setPlayingUi(false);
 
   document.getElementById('seek-back-btn').addEventListener('click', function () {
@@ -440,7 +477,7 @@
     if (target && target.closest && target.closest('.dropdown')) return;
     if (e.key === ' ') {
       e.preventDefault();
-      if (audio.paused) { audio.play().catch(function () {}); } else { audio.pause(); }
+      togglePlayback();
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
       seekTo((audio.currentTime * 1000) - seekStepMs);
