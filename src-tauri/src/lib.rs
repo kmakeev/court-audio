@@ -79,18 +79,41 @@ pub fn run() {
             // Фоновый агент выгрузки (этап 06): низкоприоритетный поток, не на
             // горячем пути захвата. Idle, пока не задан sync.server_base_url.
             ipc::sync_cmds::spawn_scheduler(app.handle().clone());
-            // Провижининг админ-PIN из env при развёртывании (этап 10.4): на
-            // первом запуске засеивает хеш в зашифрованный блоб; дальше проверка
-            // оффлайн против блоба. Best-effort — отсутствие ключа станции не
-            // роняет старт (админ-изменения тогда просто недоступны).
+            // Валидация конфигурации и ключа станции на старте (этап 13.5,
+            // R-003/R-004). Диагностика громкая: молчаливая деградация —
+            // именно тот дефект, который здесь закрываем.
             let handle = app.handle().clone();
-            if let Ok(settings) = ipc::load_settings(&handle) {
-                if let Ok(root) = ipc::resolve_storage_root(&handle, &settings) {
-                    let _ = store::admin_pin::provision_from_env_if_absent(
-                        &root,
-                        settings.storage.key_source,
-                        settings.admin.pin.min_length,
-                    );
+            match ipc::load_settings(&handle) {
+                Err(e) => {
+                    // R-003: битый settings.json не валит процесс, но гейты
+                    // применяются fail-secure (см. ipc::load_settings).
+                    eprintln!("ВНИМАНИЕ: {e}");
+                }
+                Ok(settings) => {
+                    if let Ok(root) = ipc::resolve_storage_root(&handle, &settings) {
+                        // R-004: явная валидация ключа станции. Без ключа офлайн-
+                        // вход/админ-PIN/шифрование ПДн работать не будут —
+                        // диагностируем громко, а не деградируем молча.
+                        match store::crypto::ensure_station_key(settings.storage.key_source, &root) {
+                            Err(e) => eprintln!(
+                                "ВНИМАНИЕ: ключ станции недоступен ({e}). Офлайн-вход, \
+                                 админ-PIN и шифрование ПДн недоступны. Задайте {} при \
+                                 развёртывании (см. docs/packaging.md).",
+                                store::crypto::PASSPHRASE_ENV
+                            ),
+                            // Ключ есть — провижиним админ-PIN из env (этап 10.4):
+                            // на первом запуске засеивает хеш в зашифрованный блоб.
+                            Ok(()) => {
+                                if let Err(e) = store::admin_pin::provision_from_env_if_absent(
+                                    &root,
+                                    settings.storage.key_source,
+                                    settings.admin.pin.min_length,
+                                ) {
+                                    eprintln!("ВНИМАНИЕ: не удалось провизионировать админ-PIN: {e}");
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Ok(())

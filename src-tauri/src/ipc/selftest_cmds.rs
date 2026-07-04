@@ -77,11 +77,15 @@ pub struct SelfTestInputs {
     pub operator_present: bool,
     /// Число незавершённых (recoverable) сессий.
     pub unfinished_count: usize,
+    /// Выводится ли ключ станции (`storage.key_source`) — R-004, этап 13.5.
+    pub station_key_available: bool,
+    /// Включено ли шифрование ПДн at-rest (`storage.encrypt_at_rest`).
+    pub encrypt_at_rest: bool,
 }
 
 /// Собрать чек-лист по входам. Чистая функция — вся логика статусов здесь.
 pub fn build_report(inputs: &SelfTestInputs) -> SelfTestReport {
-    let mut checks = Vec::with_capacity(5);
+    let mut checks = Vec::with_capacity(6);
 
     // 1. Устройство ввода отвечает и выбранное присутствует.
     checks.push(if inputs.device_count == 0 {
@@ -195,7 +199,38 @@ pub fn build_report(inputs: &SelfTestInputs) -> SelfTestReport {
         }
     });
 
-    // 5. Незавершённых сессий нет.
+    // 5. Ключ станции доступен (R-004, этап 13.5). Без ключа зашифровать ПДн
+    //    невозможно: при `encrypt_at_rest` запись сегментов сорвётся → Fail
+    //    (блокирует старт); иначе офлайн-вход/админ-PIN недоступны → Warn.
+    checks.push(if inputs.station_key_available {
+        SelfTestCheck {
+            id: "station_key",
+            label: "Ключ станции",
+            status: CheckStatus::Ok,
+            detail: "Ключ станции доступен — шифрование и офлайн-контур работают.".to_string(),
+            fix: None,
+        }
+    } else if inputs.encrypt_at_rest {
+        SelfTestCheck {
+            id: "station_key",
+            label: "Ключ станции",
+            status: CheckStatus::Fail,
+            detail: "Ключ станции не задан, а шифрование ПДн включено — запись не сохранится. \
+                     Задайте ключ станции при развёртывании."
+                .to_string(),
+            fix: Some("open_settings"),
+        }
+    } else {
+        SelfTestCheck {
+            id: "station_key",
+            label: "Ключ станции",
+            status: CheckStatus::Warn,
+            detail: "Ключ станции не задан — офлайн-вход по PIN и админ-PIN недоступны.".to_string(),
+            fix: Some("open_settings"),
+        }
+    });
+
+    // 6. Незавершённых сессий нет.
     checks.push(if inputs.unfinished_count == 0 {
         SelfTestCheck {
             id: "unfinished",
@@ -276,6 +311,10 @@ pub fn self_test(app: AppHandle) -> Result<SelfTestReport, String> {
         .map(|v| v.len())
         .unwrap_or(0);
 
+    // R-004: ключ станции проверяем без его использования (диагностика, не расшифровка).
+    let station_key_available =
+        crate::store::crypto::ensure_station_key(settings.storage.key_source, &root).is_ok();
+
     let inputs = SelfTestInputs {
         device_count: devices.len(),
         selected_present,
@@ -286,6 +325,8 @@ pub fn self_test(app: AppHandle) -> Result<SelfTestReport, String> {
         operator_required: settings.auth.operator.required_to_start,
         operator_present,
         unfinished_count,
+        station_key_available,
+        encrypt_at_rest: settings.storage.encrypt_at_rest,
     };
     Ok(build_report(&inputs))
 }
@@ -311,6 +352,8 @@ mod tests {
             operator_required: true,
             operator_present: true,
             unfinished_count: 0,
+            station_key_available: true,
+            encrypt_at_rest: true,
         }
     }
 
@@ -400,6 +443,29 @@ mod tests {
         let r = build_report(&i);
         assert!(r.ready);
         assert_eq!(check(&r, "operator").status, CheckStatus::Ok);
+    }
+
+    #[test]
+    fn missing_station_key_fails_when_encrypting() {
+        // R-004: без ключа при включённом шифровании запись не сохранится → Fail.
+        let mut i = healthy();
+        i.station_key_available = false;
+        i.encrypt_at_rest = true;
+        let r = build_report(&i);
+        assert!(!r.ready);
+        assert_eq!(check(&r, "station_key").status, CheckStatus::Fail);
+        assert_eq!(check(&r, "station_key").fix, Some("open_settings"));
+    }
+
+    #[test]
+    fn missing_station_key_warns_without_encryption() {
+        // Шифрование выключено: офлайн-вход/админ-PIN недоступны → Warn, не Fail.
+        let mut i = healthy();
+        i.station_key_available = false;
+        i.encrypt_at_rest = false;
+        let r = build_report(&i);
+        assert!(r.ready);
+        assert_eq!(check(&r, "station_key").status, CheckStatus::Warn);
     }
 
     #[test]

@@ -104,6 +104,11 @@ court-audio/
   [`docs/recommendations.md`](docs/recommendations.md)): `10_1_playback.md` ·
   `10_2_export.md` · `10_3_auth.md` · `10_4_settings_roles.md` ·
   `10_5_ui_adaptive.md` · `10_6_ux_polish.md`.
+- Исправления по бэклогу (проверка на станции; источник —
+  [`docs/backlog.md`](docs/backlog.md)): `13_1_ui_fixes.md` (R-005/007/009/012) ·
+  `13_2_multichannel_monitor.md` (R-008) · `13_3_mirror_structure.md` (R-010) ·
+  `13_4_export_player_stall.md` (R-011) · `13_5_gates_failsecure.md`
+  (R-003/R-004, безопасность).
 
 ## Принципы «бесперебойности» (нефункциональное ядро)
 

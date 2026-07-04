@@ -96,6 +96,27 @@ pub fn start_allowed(required_to_start: bool, operator_present: bool) -> bool {
     !required_to_start || operator_present
 }
 
+/// Fail-secure решение о старте по **результату загрузки настроек** (R-003,
+/// этап 13.5). Повреждённый конфиг (`Err`) НИКОГДА не размыкает гейт: старт
+/// запрещён с явной диагностикой, а не разрешён «в открытом режиме» на
+/// неизвестной политике. Чистая функция (тестируется без Tauri).
+pub fn start_gate_decision(
+    config: Result<&Settings, &str>,
+    operator_present: bool,
+) -> Result<(), String> {
+    match config {
+        Ok(settings) => {
+            if start_allowed(settings.auth.operator.required_to_start, operator_present) {
+                Ok(())
+            } else {
+                Err("Требуется вход оператора: авторизуйтесь перед началом записи".to_string())
+            }
+        }
+        // Битый `settings.json` → смыкаем гейт (не пускаем старт).
+        Err(_) => Err(crate::ipc::CONFIG_CORRUPT_MESSAGE.to_string()),
+    }
+}
+
 /// Ошибка оффлайн-разблокировки по кэшу (понятная для UI).
 #[derive(Debug, PartialEq, Eq)]
 pub enum OfflineUnlockError {
@@ -175,11 +196,10 @@ pub fn ensure_start_allowed(app: &AppHandle, settings: &Settings) -> Result<(), 
         .try_state::<AuthState>()
         .map(|s| s.0.lock().map(|g| g.is_some()).unwrap_or(false))
         .unwrap_or(false);
-    if start_allowed(settings.auth.operator.required_to_start, present) {
-        Ok(())
-    } else {
-        Err("Требуется вход оператора: авторизуйтесь перед началом записи".to_string())
-    }
+    // Сюда `settings` доходят уже разобранными (битый конфиг отсекает
+    // `load_settings` выше по стеку тем же fail-secure сообщением); гейт-логика
+    // едина с чистой [`start_gate_decision`].
+    start_gate_decision(Ok(settings), present)
 }
 
 // ── Общие помощники команд ────────────────────────────────────────────────────
@@ -270,19 +290,28 @@ pub fn auth_login(
         (Vec::new(), Vec::new())
     };
 
-    // Кэш зашифрованно (мягко: без ключа станции — online-only, не роняем вход).
-    if let Ok(root) = resolve_storage_root(&app, &settings) {
-        let cached = CachedSession {
-            operator_id: profile.operator_id.clone(),
-            full_name: profile.full_name.clone(),
-            role: profile.role.clone(),
-            refresh_token: tokens.refresh.clone(),
-            obtained_at_unix_ms: obtained_at,
-            pin_salt,
-            pin_hash,
-        };
-        let _ = auth_cache::save(&root, settings.storage.key_source, &cached);
-    }
+    // Кэш оффлайн-сессии — **всегда зашифрованно** ключом станции. R-004
+    // (этап 13.5): сбой шифрования НЕ проглатывается. Раньше `let _ = save(..)`
+    // прятал отсутствие ключа станции: онлайн-вход «успешен», а офлайн-старт по
+    // PIN в следующий раз молча недоступен. Теперь неудача доводится до UI явной
+    // ошибкой (ключ станции обязателен при развёртывании — см. packaging.md).
+    let root = resolve_storage_root(&app, &settings)?;
+    let cached = CachedSession {
+        operator_id: profile.operator_id.clone(),
+        full_name: profile.full_name.clone(),
+        role: profile.role.clone(),
+        refresh_token: tokens.refresh.clone(),
+        obtained_at_unix_ms: obtained_at,
+        pin_salt,
+        pin_hash,
+    };
+    auth_cache::save(&root, settings.storage.key_source, &cached).map_err(|e| {
+        format!(
+            "офлайн-режим недоступен: не удалось сохранить сессию ({e}). \
+             Задайте ключ станции ({}) при развёртывании.",
+            crate::store::crypto::PASSPHRASE_ENV
+        )
+    })?;
 
     {
         let mut guard = state.0.lock().map_err(|_| "состояние входа повреждено".to_string())?;

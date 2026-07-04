@@ -52,6 +52,23 @@ pub enum SaveOutcome {
     NeedsConfirmation { dangerous: Vec<String> },
 }
 
+/// Fail-secure проверка админ-гейта по **результату загрузки настроек** (R-003,
+/// этап 13.5). Повреждённый конфиг (`Err`) НИКОГДА не размыкает гейт: любое
+/// изменение отклоняется, чтобы порча `settings.json` не давала обойти админ-PIN.
+/// При корректном конфиге судим по текущей политике `admin.pin.required`. Чистая
+/// функция (тестируется без Tauri).
+pub fn admin_change_denied(
+    config: Result<&Settings, &str>,
+    admin_change: bool,
+    unlocked: bool,
+) -> bool {
+    match config {
+        Ok(settings) => admin_change && settings.admin.pin.required && !unlocked,
+        // Битый конфиг: не доверяем политике — смыкаем гейт.
+        Err(_) => true,
+    }
+}
+
 // ── Помощники ─────────────────────────────────────────────────────────────────
 
 fn admin_root_and_key(app: &AppHandle) -> Result<(std::path::PathBuf, crate::settings::KeySource), String> {
@@ -82,6 +99,8 @@ pub(crate) fn apply_settings_save(
     force_admin: bool,
     confirm_dangerous: bool,
 ) -> Result<SaveOutcome, String> {
+    // Fail-secure: битый `settings.json` отсекается здесь тем же сообщением
+    // «конфигурация повреждена» (не размыкает гейт) — R-003.
     let current = load_settings(app)?;
     // Гейт судит по **текущей** политике (нельзя ослабить гейт тем же сохранением).
     let admin_required = current.admin.pin.required;
@@ -91,7 +110,7 @@ pub(crate) fn apply_settings_save(
     // Импорт — всегда админ-действие: даже профиль, отличающийся лишь оператор-
     // полями, не должен применяться в обход админ-гейта (deliverable 5).
     let admin_change = force_admin || !only_operator_changed(&current, &incoming);
-    if admin_change && admin_required && !unlocked {
+    if admin_change_denied(Ok(&current), admin_change, unlocked) {
         return Err(admin_denied_message(&root));
     }
 

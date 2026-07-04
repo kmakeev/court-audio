@@ -171,6 +171,17 @@ pub fn resolve_station_key(
     }
 }
 
+/// Проверить доступность ключа станции **без его использования** (R-004,
+/// этап 13.5). Явная валидация на старте / в self-test: ключ станции обязателен
+/// и провижинится при развёртывании (env-фраза `COURT_AUDIO_STATION_PASSPHRASE`
+/// или — этап 08 — реальный OS-keystore). При недоступности возвращает причину
+/// ([`CryptoError::PassphraseMissing`]/[`CryptoError::KeystoreUnavailable`]),
+/// чтобы дать оператору/админу явную диагностику вместо молчаливой деградации
+/// офлайн-контура и шифрования ПДн.
+pub fn ensure_station_key(key_source: KeySource, root: &Path) -> Result<(), CryptoError> {
+    resolve_station_key(key_source, root).map(|_| ())
+}
+
 /// Зашифровать буфер: формат `[12B nonce][ciphertext+tag]`.
 pub fn encrypt_bytes(plain: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, CryptoError> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::Cipher(e.to_string()))?;
