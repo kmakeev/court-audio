@@ -115,8 +115,11 @@ fn disk_critical_triggers_clean_stop_without_data_loss() {
 #[test]
 fn segments_are_mirrored_to_second_storage() {
     let tmp = tempfile::tempdir().unwrap();
-    let session = tmp.path().join("primary");
-    let mirror_dir = tmp.path().join("mirror");
+    // Структура зеркала = структуре основного места (этап 13.3): корень хранилища
+    // — база, сессия — подкаталог под ним, зеркало повторяет дерево.
+    let storage_root = tmp.path().join("recordings");
+    let session = storage_root.join("session-1");
+    let mirror_root = tmp.path().join("mirror");
 
     let rate = 8_000u32;
     let total_frames = 16_000usize; // 2 полных сегмента
@@ -126,7 +129,9 @@ fn segments_are_mirrored_to_second_storage() {
 
     let rel = ConsumerReliability {
         journal: None,
-        mirror: Some(court_audio_lib::reliability::mirror::Mirror::new(&mirror_dir).unwrap()),
+        mirror: Some(
+            court_audio_lib::reliability::mirror::Mirror::new(&storage_root, &mirror_root).unwrap(),
+        ),
         disk: None,
         max_session: None,
         on_event: None,
@@ -142,13 +147,14 @@ fn segments_are_mirrored_to_second_storage() {
     )
     .unwrap();
 
-    // Зеркалируются завершённые ротацией сегменты (последний партиал — нет).
-    let mirrored: Vec<_> = std::fs::read_dir(&mirror_dir)
+    // Зеркало повторяет дерево: <mirror>/session-1/seg-*.wav (не плоский каталог).
+    let mirror_session = mirror_root.join("session-1");
+    let mirrored: Vec<_> = std::fs::read_dir(&mirror_session)
         .unwrap()
         .filter_map(|e| e.ok())
         .collect();
     assert!(!mirrored.is_empty());
-    // Каждый зеркальный файл побайтно равен оригиналу.
+    // Каждый зеркальный файл побайтно равен оригиналу в подкаталоге сессии.
     for entry in &mirrored {
         let name = entry.file_name();
         let original = session.join(&name);

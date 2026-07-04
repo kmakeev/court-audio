@@ -46,17 +46,51 @@ pub fn track_subdir_name(track_id: u32, role: &str) -> String {
     format!("track-{track_id:02}-{}", sanitize(role))
 }
 
-/// Привести роль к безопасному имени каталога (латиница/цифры/-/_; прочее → `_`).
+/// Привести роль к безопасному **ASCII**-имени каталога: кириллица
+/// транслитерируется (судья → sudya) ради читаемости при ручном разборе носителя
+/// и портативности (USB/DVD, FAT/exFAT, ASCII-инструменты, Реестр Минцифры);
+/// ASCII-буквы/цифры/`-`/`_` сохраняются; прочее → `_`. Полное человекочитаемое
+/// имя роли/метки хранится в `tracks.json` **без искажений** — имя каталога лишь
+/// для оператора, в логике адресация идёт по `track_id`.
 fn sanitize(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+        } else if let Some(lat) = translit(c) {
+            out.push_str(&lat);
+        } else {
+            out.push('_');
+        }
+    }
+    out
+}
+
+/// Транслитерация одной кириллической буквы в латиницу (иначе `None`). `ъ`/`ь`
+/// опускаются (пустая строка). Регистр первой буквы сохраняется для читаемости
+/// (`Судья` → `Sudya`).
+fn translit(c: char) -> Option<String> {
+    let base = c.to_lowercase().next().unwrap_or(c);
+    let lat: &str = match base {
+        'а' => "a", 'б' => "b", 'в' => "v", 'г' => "g", 'д' => "d",
+        'е' => "e", 'ё' => "e", 'ж' => "zh", 'з' => "z", 'и' => "i",
+        'й' => "y", 'к' => "k", 'л' => "l", 'м' => "m", 'н' => "n",
+        'о' => "o", 'п' => "p", 'р' => "r", 'с' => "s", 'т' => "t",
+        'у' => "u", 'ф' => "f", 'х' => "h", 'ц' => "c", 'ч' => "ch",
+        'ш' => "sh", 'щ' => "shch", 'ъ' => "", 'ы' => "y", 'ь' => "",
+        'э' => "e", 'ю' => "yu", 'я' => "ya",
+        _ => return None,
+    };
+    if lat.is_empty() {
+        return Some(String::new());
+    }
+    if c.is_uppercase() {
+        let mut chars = lat.chars();
+        let first = chars.next().unwrap().to_ascii_uppercase();
+        Some(std::iter::once(first).chain(chars).collect())
+    } else {
+        Some(lat.to_string())
+    }
 }
 
 /// Построить карту дорожек из разрешённого состава (`audio::tracks`).
@@ -201,8 +235,19 @@ mod tests {
     }
 
     #[test]
-    fn subdir_name_sanitizes_role() {
-        assert_eq!(track_subdir_name(1, "зал/room"), "track-01-____room");
+    fn subdir_name_transliterates_cyrillic_role() {
+        // Русские роли транслитерируются в читаемый ASCII (не «track-00-_____»).
+        assert_eq!(track_subdir_name(0, "судья"), "track-00-sudya");
+        assert_eq!(track_subdir_name(1, "секретарь"), "track-01-sekretar");
+        assert_eq!(track_subdir_name(2, "защита"), "track-02-zashchita");
+        // Регистр первой буквы сохраняется.
+        assert_eq!(track_subdir_name(3, "Судья"), "track-03-Sudya");
+    }
+
+    #[test]
+    fn subdir_name_sanitizes_path_hostile_chars() {
+        // Кириллица транслитерируется, путь-опасный `/` → `_`, ASCII как есть.
+        assert_eq!(track_subdir_name(1, "зал/room"), "track-01-zal_room");
     }
 
     #[test]

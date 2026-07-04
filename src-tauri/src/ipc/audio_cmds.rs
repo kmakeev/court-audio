@@ -12,7 +12,7 @@
 //! (`crate::audio`, `crate::recorder`, `crate::reliability`) остаётся
 //! Tauri-agnostic и тестируемым.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio::capture::{
-    CaptureParams, CaptureSession, DiskWatch, LevelEvent, MonitorSession, ReliabilityConfig,
+    CaptureParams, CaptureSession, DiskWatch, LevelEvent, MultiMonitor, ReliabilityConfig,
     ReliabilityEvent,
 };
 use crate::audio::devices::{list_input_devices, DeviceInfo};
@@ -87,8 +87,10 @@ pub struct ActiveSession {
 pub struct CaptureState(pub Mutex<Option<ActiveSession>>);
 
 /// Управляемое Tauri состояние активного мониторинга уровня (без записи).
+/// Многоканал (этап 13.2): [`MultiMonitor`] держит по превью-потоку на дорожку
+/// (одноканал — один поток, `track_id 0`).
 #[derive(Default)]
-pub struct MonitorState(pub Mutex<Option<MonitorSession>>);
+pub struct MonitorState(pub Mutex<Option<MultiMonitor>>);
 
 /// Ответ `start_capture`: фактический формат и каталог сессии.
 #[derive(Debug, Clone, Serialize)]
@@ -223,6 +225,14 @@ fn start_single(
         .map_err(|e| e.to_string())?;
     }
 
+    // Зеркало метаданных при старте (этап 13.3): корневой журнал с `SessionStarted`
+    // едет на второй носитель сразу — зеркало реконсилируемо даже при сбое до стопа.
+    mirror_session_metadata(
+        settings,
+        storage_root,
+        &[output_dir.join(crate::recorder::journal::JOURNAL_FILE_NAME)],
+    );
+
     let app_for_level = app.clone();
     let level_cb = Box::new(move |level| {
         let _ = app_for_level.emit(EVENT_AUDIO_LEVEL, level);
@@ -291,6 +301,18 @@ fn start_multichannel(
         })
         .map_err(|e| e.to_string())?;
     }
+
+    // Зеркало метаданных при старте (этап 13.3): `tracks.json` + корневой журнал
+    // едут сразу — зеркало опознаётся как многоканальное и реконсилируемо даже
+    // при сбое до стопа (per-track журналы/сегменты consumer досылает «на лету»).
+    mirror_session_metadata(
+        settings,
+        storage_root,
+        &[
+            output_dir.join(multitrack::TRACKS_FILE_NAME),
+            output_dir.join(crate::recorder::journal::JOURNAL_FILE_NAME),
+        ],
+    );
 
     let mut specs = Vec::with_capacity(map.tracks.len());
     let mut subdirs = Vec::with_capacity(map.tracks.len());
@@ -412,6 +434,26 @@ pub fn stop_capture(
         j.append(&JournalRecord::Stopped)
             .map_err(|e| e.to_string())?;
     }
+
+    // Финальное зеркалирование метаданных (этап 13.3): корневой журнал (уже с
+    // `Stopped`), `tracks.json` и per-track журналы — чтобы по зеркалу сессия
+    // реконсилировалась как штатно завершённая. Best-effort; сбой не роняет стоп.
+    if let Ok(settings) = load_settings(&app) {
+        if let Ok(storage_root) = resolve_storage_root(&app, &settings) {
+            let mut files = vec![active
+                .output_dir
+                .join(crate::recorder::journal::JOURNAL_FILE_NAME)];
+            let tracks_json = active.output_dir.join(multitrack::TRACKS_FILE_NAME);
+            if tracks_json.exists() {
+                files.push(tracks_json);
+            }
+            for subdir in &active.track_subdirs {
+                files.push(subdir.join(crate::recorder::journal::JOURNAL_FILE_NAME));
+            }
+            mirror_session_metadata(&settings, &storage_root, &files);
+        }
+    }
+
     emit_state(&app, "stopped");
     Ok(summaries)
 }
@@ -487,21 +529,52 @@ pub fn start_monitor(
 
     let settings = load_settings(&app)?;
     let storage_root = resolve_storage_root(&app, &settings)?;
-    // output_dir монитору не нужен (он не пишет), но CaptureParams его требует.
-    let params = build_params(&settings, storage_root);
+    // Состав превью-потоков — та же карта дорожек, что у записи (этап 13.2): в
+    // многоканале по потоку на дорожку/канал, иначе один поток v1 (track_id 0).
+    let tracks = resolve_tracks(&settings).map_err(|e| e.to_string())?;
+    let params = build_monitor_params(&settings, &storage_root, &tracks);
 
     let app_for_level = app.clone();
-    let level_cb = Box::new(move |level| {
+    let level_emit: crate::audio::capture::MonitorLevelEmit = Arc::new(move |level: LevelEvent| {
         let _ = app_for_level.emit(EVENT_AUDIO_LEVEL, level);
     });
 
-    let session = MonitorSession::start(params, level_cb).map_err(|e| e.to_string())?;
+    let session = MultiMonitor::start(params, level_emit).map_err(|e| e.to_string())?;
     let mut guard = monitor
         .0
         .lock()
         .map_err(|_| "состояние мониторинга повреждено".to_string())?;
     *guard = Some(session);
     Ok(())
+}
+
+/// Собрать параметры превью-потоков из карты дорожек (реестр — единственный
+/// источник). Многоканал (`audio.multichannel.enabled` + непустой `audio.tracks`):
+/// по потоку на дорожку — извлечение своего канала (`channel_index`) под её
+/// `track_id`, дорожка моно; совпадает со стартом записи ([`start_multichannel`]).
+/// Иначе — один поток v1 (`build_params`: downmix, `track_id 0`), поведение без
+/// изменений. `output_dir` монитору не нужен (он не пишет), но `CaptureParams`
+/// его требует — передаём корень хранилища.
+fn build_monitor_params(
+    settings: &Settings,
+    storage_root: &std::path::Path,
+    tracks: &[ResolvedTrack],
+) -> Vec<CaptureParams> {
+    let multichannel = settings.audio.multichannel.enabled && !settings.audio.tracks.is_empty();
+    if !multichannel {
+        return vec![build_params(settings, storage_root.to_path_buf())];
+    }
+    tracks
+        .iter()
+        .map(|t| {
+            let mut p = build_params(settings, storage_root.to_path_buf());
+            p.device = t.device.clone();
+            p.channel_index = Some(t.channel_index);
+            p.track_id = t.track_id;
+            p.target_channels = 1; // дорожка моно
+            p
+        })
+        .collect()
 }
 
 /// Остановить мониторинг уровня и освободить устройство.
@@ -687,14 +760,22 @@ fn build_reliability(
     device_name: Option<String>,
 ) -> ReliabilityConfig {
     let r = &settings.reliability;
-    let mirror_dir = if r.mirror.enabled {
-        r.mirror.path.as_ref().map(PathBuf::from)
+    // Зеркало (этап 13.3): структура зеркала = структуре основного места, поэтому
+    // передаём корень хранилища как базу для реконструкции дерева сессии/дорожки.
+    let mirror = if r.mirror.enabled {
+        r.mirror
+            .path
+            .as_ref()
+            .map(|p| crate::audio::capture::MirrorSpec {
+                storage_root: storage_root.to_path_buf(),
+                mirror_root: PathBuf::from(p),
+            })
     } else {
         None
     };
     ReliabilityConfig {
         journal: Some(journal),
-        mirror_dir,
+        mirror,
         disk: Some(DiskWatch {
             // Свободное место меряем по тому корня хранилища.
             path: storage_root.to_path_buf(),
@@ -718,4 +799,89 @@ fn build_reliability(
 /// Каталог конкретной сессии: `<storage_root>/session-<unix_ms>`.
 fn session_dir(storage_root: &std::path::Path) -> PathBuf {
     storage_root.join(format!("session-{}", now_unix_ms()))
+}
+
+/// Best-effort зеркалирование метаданных сессии (журнал(ы), `tracks.json`) на
+/// второй носитель (этап 13.3). Сегменты зеркалирует consumer «на лету»; здесь —
+/// метаданные (при старте — чтобы зеркало было реконсилируемо и после сбоя; при
+/// стопе — финальное состояние с `Stopped`). Структура зеркала = структуре
+/// основного места; сбой только логируется и **не влияет** на запись.
+fn mirror_session_metadata(settings: &Settings, storage_root: &Path, files: &[PathBuf]) {
+    let r = &settings.reliability;
+    if !r.mirror.enabled {
+        return;
+    }
+    let Some(mirror_root) = r.mirror.path.as_ref() else {
+        return;
+    };
+    let mirror = match crate::reliability::mirror::Mirror::new(storage_root, Path::new(mirror_root))
+    {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[reliability] зеркало метаданных недоступно ({mirror_root}): {e}");
+            return;
+        }
+    };
+    for f in files {
+        if f.exists() {
+            if let Err(e) = mirror.mirror_file(f) {
+                eprintln!("[reliability] зеркалирование метаданных {f:?} не удалось: {e}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::TrackConfig;
+
+    fn track(device: Option<&str>, channel: u16, role: &str) -> TrackConfig {
+        TrackConfig {
+            device: device.map(|s| s.to_string()),
+            channel_index: channel,
+            role: role.to_string(),
+            label: String::new(),
+        }
+    }
+
+    #[test]
+    fn monitor_params_single_is_one_stream_track0() {
+        // Одноканал (v1): один превью-поток, downmix (channel_index None), tid 0.
+        let settings = Settings::default();
+        let tracks = resolve_tracks(&settings).unwrap();
+        let params = build_monitor_params(&settings, std::path::Path::new("/tmp/root"), &tracks);
+        assert_eq!(params.len(), 1);
+        assert_eq!(params[0].track_id, 0);
+        assert_eq!(params[0].channel_index, None);
+    }
+
+    #[test]
+    fn monitor_params_multichannel_covers_all_tracks_including_duplicate_device() {
+        // Два канала одного устройства + «дубль» первого канала на третьей дорожке:
+        // превью должно поднять поток на каждую дорожку под своим track_id.
+        let mut settings = Settings::default();
+        settings.audio.multichannel.enabled = true;
+        settings.audio.device = Some("Многоканальная карта".to_string());
+        settings.audio.tracks = vec![
+            track(None, 0, "judge"),          // канал 0 общего устройства
+            track(None, 1, "defense"),        // канал 1 общего устройства
+            track(None, 0, "room"),           // ДУБЛЬ канала 0 на другой дорожке
+        ];
+        let tracks = resolve_tracks(&settings).unwrap();
+        let params = build_monitor_params(&settings, std::path::Path::new("/tmp/root"), &tracks);
+
+        assert_eq!(params.len(), 3, "поток на каждую дорожку карты");
+        let ids: Vec<u32> = params.iter().map(|p| p.track_id).collect();
+        assert_eq!(ids, vec![0, 1, 2], "эмиссия под всеми track_id");
+        assert_eq!(params[0].channel_index, Some(0));
+        assert_eq!(params[1].channel_index, Some(1));
+        // Дубль: третья дорожка — то же устройство и канал 0, но свой track_id.
+        assert_eq!(params[2].channel_index, Some(0));
+        assert_eq!(params[2].track_id, 2);
+        for p in &params {
+            assert_eq!(p.target_channels, 1, "дорожка моно");
+            assert_eq!(p.device.as_deref(), Some("Многоканальная карта"));
+        }
+    }
 }

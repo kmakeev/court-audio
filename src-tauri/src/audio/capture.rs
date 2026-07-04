@@ -90,6 +90,16 @@ pub enum ReliabilityEvent {
 /// Колбэк событий надёжности; `Arc` — разделяется consumer- и supervisor-потоками.
 pub type ReliabilityCallback = Arc<dyn Fn(ReliabilityEvent) + Send + Sync + 'static>;
 
+/// Спецификация зеркала (этап 13.3): корень основного хранилища
+/// (`storage.root_path`) как база для реконструкции дерева + корень второго
+/// носителя (`reliability.mirror.path`). Пара нужна, чтобы зеркало повторяло
+/// структуру основного места (`<mirror>/<session>/<track>/…`).
+#[derive(Debug, Clone)]
+pub struct MirrorSpec {
+    pub storage_root: PathBuf,
+    pub mirror_root: PathBuf,
+}
+
 /// Параметры контроля диска (путь тома + пороги из `Settings.reliability`).
 #[derive(Debug, Clone)]
 pub struct DiskWatch {
@@ -131,8 +141,8 @@ pub struct CaptureParams {
 pub struct ReliabilityConfig {
     /// Общий журнал сессии (lifecycle-записи делает IPC; сегменты — consumer).
     pub journal: Option<Arc<Mutex<Journal>>>,
-    /// Каталог зеркала (`reliability.mirror.path`), если включено.
-    pub mirror_dir: Option<PathBuf>,
+    /// Зеркало на второй носитель (`reliability.mirror.*`), если включено.
+    pub mirror: Option<MirrorSpec>,
     /// Контроль свободного места (пороги из реестра).
     pub disk: Option<DiskWatch>,
     /// Порог длины сессии (`max_session_hours`) — предупреждение.
@@ -153,7 +163,7 @@ impl ReliabilityConfig {
     pub fn none() -> Self {
         Self {
             journal: None,
-            mirror_dir: None,
+            mirror: None,
             disk: None,
             max_session: None,
             watchdog_timeout: None,
@@ -195,6 +205,26 @@ impl ConsumerReliability {
         if let Some(j) = &self.journal {
             if let Ok(mut g) = j.lock() {
                 let _ = g.append(rec);
+            }
+        }
+    }
+
+    /// Досылка метаданных на зеркало (этап 13.3): копирует журнал дорожки рядом
+    /// с уже зазеркаленными сегментами, чтобы по зеркалу можно было
+    /// реконсилировать сессию (SQLite-манифест и целостность reconcile строит из
+    /// журнала + сегментов). Best-effort; `replay` терпит усечённую последнюю
+    /// строку, так что гонка с редкой записью supervisor'а безопасна.
+    fn mirror_journal(&self) {
+        let Some(mirror) = &self.mirror else {
+            return;
+        };
+        let path = self
+            .journal
+            .as_ref()
+            .and_then(|j| j.lock().ok().map(|g| g.path().to_path_buf()));
+        if let Some(path) = path {
+            if let Err(e) = mirror.mirror_file(&path) {
+                eprintln!("[reliability] зеркалирование журнала {path:?} не удалось: {e}");
             }
         }
     }
@@ -285,11 +315,16 @@ impl CaptureSession {
         };
 
         // Зеркало создаём заранее (best-effort): сбой подготовки не валит запись.
-        let mirror = match &reliability.mirror_dir {
-            Some(dir) => match Mirror::new(dir) {
+        // Структура зеркала = структуре основного места (этап 13.3): передаём
+        // корень хранилища как базу для реконструкции дерева сессии/дорожки.
+        let mirror = match &reliability.mirror {
+            Some(spec) => match Mirror::new(&spec.storage_root, &spec.mirror_root) {
                 Ok(m) => Some(m),
                 Err(e) => {
-                    eprintln!("[reliability] не удалось подготовить зеркало {dir:?}: {e}");
+                    eprintln!(
+                        "[reliability] не удалось подготовить зеркало {:?}: {e}",
+                        spec.mirror_root
+                    );
                     None
                 }
             },
@@ -420,11 +455,33 @@ impl Drop for CaptureSession {
     }
 }
 
+/// Параметры одного превью-потока мониторинга (подмножество [`ConsumerConfig`],
+/// без записи). Собирается из [`CaptureParams`] + фактического формата устройства.
+#[derive(Debug, Clone)]
+pub struct MonitorConfig {
+    /// Нативное число каналов устройства (для интерлив-разбора буфера).
+    pub native_channels: u16,
+    /// `audio.level_update_hz` — частота событий уровня.
+    pub level_update_hz: u32,
+    /// Многоканал (этап 09): если задан — из интерливнутого потока извлекается
+    /// именно этот канал дорожки (моно, один столбик). `None` → поведение v1
+    /// (уровни по всем нативным каналам устройства).
+    pub channel_index: Option<u16>,
+    /// Дорожка, к которой относятся уровни (многоканал). Для v1 — `0`.
+    pub track_id: u32,
+}
+
 /// Лёгкий мониторинг уровня **без записи** (этап 04): открывает устройство и
 /// шлёт события уровня по каналам, чтобы оператор видел работу микрофона до
 /// старта записи. Переиспользует [`capture_thread`] (тот же выбор устройства/
 /// конфига и кольцевой буфер), но вместо записи только считает уровни и
 /// отбрасывает семплы. Без watchdog/журнала/сегментов — мониторинг не критичен.
+///
+/// Многоканал (этап 13.2 — `promts/13_2_multichannel_monitor.md`): одна дорожка
+/// = один [`MonitorSession`] (по потоку на устройство/канал), эмиссия под своим
+/// `track_id` — так превью «до» записи покрывает **все** дорожки карты (включая
+/// «дубли» одного микрофона на разных дорожках), как это делает сама запись
+/// ([`MultiCapture`]). Оркестрация набора потоков — [`MultiMonitor`].
 pub struct MonitorSession {
     cmd_tx: Sender<ControlCmd>,
     capture_handle: Option<JoinHandle<()>>,
@@ -434,6 +491,8 @@ pub struct MonitorSession {
 
 impl MonitorSession {
     /// Запустить мониторинг: поднять `cpal`-поток и поток расчёта уровней.
+    /// Канал/дорожка берутся из `params` (одноканал — `channel_index None`,
+    /// `track_id 0`; многоканал — канал дорожки и её `track_id`).
     pub fn start(params: CaptureParams, level_cb: LevelCallback) -> Result<Self, AudioError> {
         let (init_tx, init_rx) = mpsc::channel();
         let (cmd_tx, cmd_rx) = mpsc::channel();
@@ -453,18 +512,15 @@ impl MonitorSession {
 
         let monitor_stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&monitor_stop);
-        let level_update_hz = params.level_update_hz;
+        let cfg = MonitorConfig {
+            native_channels: native.channels,
+            level_update_hz: params.level_update_hz,
+            channel_index: params.channel_index,
+            track_id: params.track_id,
+        };
         let monitor_handle = thread::Builder::new()
             .name("audio-monitor".into())
-            .spawn(move || {
-                run_monitor(
-                    consumer,
-                    native.channels,
-                    level_update_hz,
-                    level_cb,
-                    stop_for_thread,
-                )
-            })
+            .spawn(move || run_monitor(consumer, cfg, level_cb, stop_for_thread))
             .map_err(|e| AudioError::Stream(e.to_string()))?;
 
         Ok(Self {
@@ -498,29 +554,92 @@ impl Drop for MonitorSession {
     }
 }
 
-/// Поток мониторинга: читает кольцевой буфер, эмитит уровни по нативным каналам
-/// устройства (с троттлингом до `level_update_hz`) и отбрасывает семплы.
-fn run_monitor(
+/// Эмиттер уровней монитора (IPC подключает Tauri-эмиттер `audio_level`).
+/// События уже несут `track_id` дорожки. Разделяется всеми превью-потоками.
+pub type MonitorLevelEmit = Arc<dyn Fn(LevelEvent) + Send + Sync + 'static>;
+
+/// Оркестратор многодорожечного превью-мониторинга (этап 13.2): по одному
+/// [`MonitorSession`] на дорожку карты дорожек — тот же состав, что у записи
+/// ([`MultiCapture`]), но без сегментного райтера/журнала/зеркала. Для
+/// одноканального пути — ровно один поток (`track_id 0`, поведение v1).
+pub struct MultiMonitor {
+    sessions: Vec<MonitorSession>,
+}
+
+impl MultiMonitor {
+    /// Поднять превью-поток на каждый набор параметров (дорожку). При сбое любой
+    /// — уже поднятые гасятся (не оставляем полузапущенный монитор, не течём
+    /// `cpal`-потоками).
+    pub fn start(
+        params: Vec<CaptureParams>,
+        level_emit: MonitorLevelEmit,
+    ) -> Result<Self, AudioError> {
+        let mut sessions: Vec<MonitorSession> = Vec::with_capacity(params.len());
+        for p in params {
+            let emit = level_emit.clone();
+            let level_cb: LevelCallback = Box::new(move |lv: LevelEvent| emit(lv));
+            match MonitorSession::start(p, level_cb) {
+                Ok(s) => sessions.push(s),
+                Err(e) => {
+                    for s in sessions {
+                        s.stop();
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Ok(Self { sessions })
+    }
+
+    /// Число превью-потоков (дорожек).
+    pub fn track_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Погасить все превью-потоки и освободить устройства.
+    pub fn stop(self) {
+        for s in self.sessions {
+            s.stop();
+        }
+    }
+}
+
+/// Уровни превью для одного среза буфера. Многоканал (`channel_index` задан):
+/// извлекаем канал дорожки (моно, один столбик) под её `track_id`. Одноканал
+/// (`None`): уровни по всем нативным каналам устройства (поведение v1).
+fn monitor_levels(samples: &[f32], cfg: &MonitorConfig) -> LevelEvent {
+    match cfg.channel_index {
+        Some(ci) => {
+            let mono = convert::select_channel(samples, cfg.native_channels, ci);
+            levels_of(&mono, 1, cfg.track_id)
+        }
+        None => levels_of(samples, cfg.native_channels, cfg.track_id),
+    }
+}
+
+/// Поток мониторинга: читает кольцевой буфер, эмитит уровни (с троттлингом до
+/// `level_update_hz`) под `track_id` дорожки и отбрасывает семплы. Tauri-agnostic
+/// — драйвится напрямую интеграционным тестом (как [`run_consumer`]).
+pub fn run_monitor(
     consumer: ring::Consumer,
-    native_channels: u16,
-    level_update_hz: u32,
+    cfg: MonitorConfig,
     level_cb: LevelCallback,
     stop: Arc<AtomicBool>,
 ) {
     let mut scratch = vec![0.0f32; consumer.capacity().max(1)];
-    let poll = Duration::from_secs_f64(1.0 / (level_update_hz.max(1) as f64));
+    let poll = Duration::from_secs_f64(1.0 / (cfg.level_update_hz.max(1) as f64));
     let mut last_emit = Instant::now();
     while !stop.load(Ordering::Acquire) {
         let n = consumer.pop_slice(&mut scratch);
         if n > 0 {
             if last_emit.elapsed() >= poll {
-                level_cb(levels_of(&scratch[..n], native_channels, 0));
+                level_cb(monitor_levels(&scratch[..n], &cfg));
                 last_emit = Instant::now();
             }
             continue;
         }
         if last_emit.elapsed() >= poll {
-            level_cb(levels_of(&[], native_channels, 0));
+            level_cb(monitor_levels(&[], &cfg));
             last_emit = Instant::now();
         }
         thread::sleep(poll);
@@ -889,14 +1008,16 @@ pub fn run_consumer(
             writer.maybe_flush()?;
 
             // По факту закрытия сегмента: журнал + зеркало + контроль диска.
+            let mut closed_any = false;
             for seg in writer.drain_completed() {
                 rel.journal(&JournalRecord::SegmentCompleted {
                     index: seg.index,
-                    path: seg.path.to_string_lossy().into_owned(),
+                    path: segment_journal_name(&seg.path),
                     frames: seg.frames,
                     started_at_unix_ms: seg.started_at_unix_ms as u64,
                 });
                 journaled += 1;
+                closed_any = true;
                 if let Some(mirror) = &rel.mirror {
                     if let Err(e) = mirror.mirror_segment(&seg) {
                         eprintln!(
@@ -909,6 +1030,11 @@ pub fn run_consumer(
                 if check_disk(&rel, &mut last_disk_status) == DiskStatus::Critical {
                     break 'run; // защитный стоп: ниже finalize гарантирует флаш
                 }
+            }
+            // Досылаем журнал дорожки на зеркало по факту закрытия сегмента(ов) —
+            // не на каждом пробуждении (журнал меняется только при закрытии).
+            if closed_any {
+                rel.mirror_journal();
             }
 
             // Предупреждение о длине сессии (v1: только событие).
@@ -944,7 +1070,7 @@ pub fn run_consumer(
     for seg in segments.iter().skip(journaled) {
         rel.journal(&JournalRecord::SegmentCompleted {
             index: seg.index,
-            path: seg.path.to_string_lossy().into_owned(),
+            path: segment_journal_name(&seg.path),
             frames: seg.frames,
             started_at_unix_ms: seg.started_at_unix_ms as u64,
         });
@@ -957,6 +1083,9 @@ pub fn run_consumer(
             }
         }
     }
+    // Финальная досылка журнала дорожки на зеркало (хвостовой сегмент/защитный
+    // стоп): на зеркале лежит полный состав сегментов дорожки для реконсиляции.
+    rel.mirror_journal();
     Ok(segments)
 }
 
@@ -986,6 +1115,16 @@ fn check_disk(rel: &ConsumerReliability, last: &mut DiskStatus) -> DiskStatus {
         *last = status;
     }
     status
+}
+
+/// Имя сегмента для журнала — **относительное** (basename), не абсолютный путь:
+/// так журнал самодостаточен и реконсилируется и из основного места, и с зеркала
+/// (этап 13.3), где абсолютный путь основного места вёл бы на исходный носитель.
+/// `reconcile::resolve_path` джойнит имя с каталогом, из которого читает журнал.
+fn segment_journal_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 /// Уровни по каналам для интерливнутого буфера (`channels` дорожек). Пустой
@@ -1050,5 +1189,85 @@ mod tests {
     fn levels_of_carries_track_id() {
         let l = levels_of(&[0.2], 1, 3);
         assert_eq!(l.track_id, 3);
+    }
+
+    #[test]
+    fn monitor_levels_single_keeps_native_channels_track0() {
+        // Одноканал (channel_index None): уровни по всем нативным каналам, tid 0.
+        let cfg = MonitorConfig {
+            native_channels: 2,
+            level_update_hz: 25,
+            channel_index: None,
+            track_id: 0,
+        };
+        let l = monitor_levels(&[0.8, 0.1, -0.8, -0.1], &cfg);
+        assert_eq!(l.track_id, 0);
+        assert_eq!(l.channels.len(), 2);
+        assert!((l.channels[0].peak - 0.8).abs() < 1e-6);
+        assert!((l.channels[1].peak - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn monitor_levels_multichannel_selects_channel_under_track_id() {
+        // Многоканал: дорожка извлекает свой канал (моно, один столбик) под tid.
+        let interleaved = [0.8, 0.1, -0.8, -0.1]; // канал 0 громкий, канал 1 тихий
+        let cfg1 = MonitorConfig {
+            native_channels: 2,
+            level_update_hz: 25,
+            channel_index: Some(1),
+            track_id: 4,
+        };
+        let l = monitor_levels(&interleaved, &cfg1);
+        assert_eq!(l.track_id, 4);
+        assert_eq!(l.channels.len(), 1, "дорожка моно — один столбик");
+        assert!((l.channels[0].peak - 0.1).abs() < 1e-6, "именно канал 1");
+    }
+
+    #[test]
+    fn monitor_levels_duplicate_device_emits_per_track_id() {
+        // «Дубль» одного микрофона на двух дорожках: обе читают канал 0 того же
+        // 2-канального устройства, но эмитят под своими track_id — до записи оба
+        // индикатора живые (совпадает с веткой записи).
+        let interleaved = [0.5, -0.2, -0.5, 0.2]; // канал 0 = ±0.5, канал 1 = ±0.2
+        let a = monitor_levels(
+            &interleaved,
+            &MonitorConfig {
+                native_channels: 2,
+                level_update_hz: 25,
+                channel_index: Some(0),
+                track_id: 2,
+            },
+        );
+        let b = monitor_levels(
+            &interleaved,
+            &MonitorConfig {
+                native_channels: 2,
+                level_update_hz: 25,
+                channel_index: Some(0),
+                track_id: 3,
+            },
+        );
+        assert_eq!(a.track_id, 2);
+        assert_eq!(b.track_id, 3);
+        assert_eq!(a.channels.len(), 1);
+        assert_eq!(a.channels[0], b.channels[0], "оба несут канал 0 (дубль)");
+        assert!((a.channels[0].peak - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn monitor_levels_empty_keeps_one_column_per_track() {
+        // Пустой буфер: UI продолжает рисовать столбик(и) дорожки (нули).
+        let mono = monitor_levels(
+            &[],
+            &MonitorConfig {
+                native_channels: 2,
+                level_update_hz: 25,
+                channel_index: Some(1),
+                track_id: 1,
+            },
+        );
+        assert_eq!(mono.track_id, 1);
+        assert_eq!(mono.channels.len(), 1);
+        assert_eq!(mono.channels[0].peak, 0.0);
     }
 }
