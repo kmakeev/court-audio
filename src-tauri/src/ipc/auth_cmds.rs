@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::ipc::{load_settings, resolve_storage_root};
 use crate::reliability::watchdog::now_unix_ms;
 use crate::settings::Settings;
-use crate::store::auth_cache;
+use crate::store::{auth_cache, operator_profile};
 use crate::sync::auth::{
     cache_expires_at_unix_ms, cached_session_valid, hash_pin, verify_pin, AuthTransport,
     CachedSession, HttpAuthTransport, OperatorProfile,
@@ -39,6 +39,10 @@ pub struct ActiveOperator {
     pub refresh_token: String,
     pub obtained_at_unix_ms: u64,
     pub online: bool,
+    /// Сессия открыта **автономным офлайн-стартом** по провижиненному PIN
+    /// (этап 13.6 — B-001): идентичность из провижининг-профиля, онлайн-входа не
+    /// было. Признак доезжает в журнал сессии (`SessionStarted`) → контракт `07`.
+    pub autonomous: bool,
 }
 
 impl ActiveOperator {
@@ -87,6 +91,9 @@ pub struct AuthStatusView {
     pub cache_expires_at_unix_ms: Option<u64>,
     /// Требуется ли PIN для оффлайн-разблокировки (`auth.operator.offline_pin`).
     pub pin_required: bool,
+    /// Доступен ли **автономный** офлайн-старт (B-001, этап 13.6): режим включён
+    /// флагом реестра **и** операторский профиль провижинен, пока не вошли.
+    pub autonomous_available: bool,
 }
 
 // ── Чистая логика (тестируемая без Tauri) ─────────────────────────────────────
@@ -144,6 +151,52 @@ impl std::fmt::Display for OfflineUnlockError {
     }
 }
 
+/// Ошибка автономного офлайн-старта (B-001, этап 13.6) — понятная для UI.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AutonomousUnlockError {
+    /// Автономный режим выключен в реестре (обычная станция).
+    Disabled,
+    /// Операторский профиль не провижинен на станции.
+    NotProvisioned,
+    /// Неверный PIN.
+    WrongPin,
+}
+
+impl std::fmt::Display for AutonomousUnlockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AutonomousUnlockError::Disabled => write!(
+                f,
+                "автономный офлайн-старт не включён для этой станции"
+            ),
+            AutonomousUnlockError::NotProvisioned => write!(
+                f,
+                "операторский профиль не задан при развёртывании — обратитесь к администратору"
+            ),
+            AutonomousUnlockError::WrongPin => write!(f, "неверный PIN"),
+        }
+    }
+}
+
+/// Решение об **автономном** офлайн-старте (B-001): режим включён флагом реестра,
+/// профиль провижинен, PIN верен. Чистая функция (тестируется без Tauri/store).
+pub fn autonomous_unlock_decision(
+    enabled: bool,
+    profile_present: bool,
+    pin_ok: bool,
+) -> Result<(), AutonomousUnlockError> {
+    if !enabled {
+        return Err(AutonomousUnlockError::Disabled);
+    }
+    if !profile_present {
+        return Err(AutonomousUnlockError::NotProvisioned);
+    }
+    if !pin_ok {
+        return Err(AutonomousUnlockError::WrongPin);
+    }
+    Ok(())
+}
+
 /// Решение об оффлайн-разблокировке: сначала окно кэша, затем PIN (если требуется).
 pub fn offline_unlock_decision(
     session: &CachedSession,
@@ -169,6 +222,14 @@ pub(crate) fn current_operator_id(app: &AppHandle) -> String {
     app.try_state::<AuthState>()
         .and_then(|s| s.0.lock().ok().and_then(|g| g.as_ref().map(|o| o.operator_id.clone())))
         .unwrap_or_default()
+}
+
+/// Открыта ли активная сессия автономным офлайн-стартом (B-001). Признак уходит
+/// в журнал `SessionStarted` и далее в контракт `07` (сервер помечает запись).
+pub(crate) fn current_operator_autonomous(app: &AppHandle) -> bool {
+    app.try_state::<AuthState>()
+        .and_then(|s| s.0.lock().ok().and_then(|g| g.as_ref().map(|o| o.autonomous)))
+        .unwrap_or(false)
 }
 
 /// Access-токен вошедшего оператора для выгрузки (или `None` → очередь копится).
@@ -221,6 +282,7 @@ fn status_view(app: &AppHandle, state: &AuthState) -> Result<AuthStatusView, Str
             offline_cached: false,
             cache_expires_at_unix_ms: Some(cache_expires_at_unix_ms(op.obtained_at_unix_ms, hours)),
             pin_required,
+            autonomous_available: false,
         });
     }
     drop(guard);
@@ -231,12 +293,19 @@ fn status_view(app: &AppHandle, state: &AuthState) -> Result<AuthStatusView, Str
         }
         _ => (false, None),
     };
+    // Автономный старт (B-001): доступен, только если режим включён флагом реестра
+    // и операторский профиль провижинен на станции.
+    let autonomous_available = settings.auth.operator.autonomous_offline.enabled
+        && resolve_storage_root(app, &settings)
+            .map(|root| operator_profile::is_provisioned(&root))
+            .unwrap_or(false);
     Ok(AuthStatusView {
         operator: None,
         online: false,
         offline_cached,
         cache_expires_at_unix_ms: expires,
         pin_required,
+        autonomous_available,
     })
 }
 
@@ -323,6 +392,7 @@ pub fn auth_login(
             refresh_token: tokens.refresh,
             obtained_at_unix_ms: obtained_at,
             online: true,
+            autonomous: false,
         });
     }
     let status = status_view(&app, &state)?;
@@ -359,6 +429,62 @@ pub fn auth_unlock_offline(
             refresh_token: session.refresh_token.clone(),
             obtained_at_unix_ms: session.obtained_at_unix_ms,
             online: false,
+            autonomous: false,
+        });
+    }
+    let status = status_view(&app, &state)?;
+    emit_state(&app, &status);
+    Ok(status)
+}
+
+/// **Автономный** офлайн-старт по провижиненному PIN (B-001, этап 13.6): в
+/// изолированном зале, где онлайн-входа не было ни разу. Гейт — флаг реестра
+/// `auth.operator.autonomous_offline.enabled` (дефолт «выкл.»; обычные станции
+/// команду не используют — кнопки в UI нет, ядро проверяет независимо).
+/// Идентичность — из зашифрованного провижининг-профиля (`operator_profile.enc`),
+/// а не из онлайн-сессии; access/refresh нет (выгрузка копится в отложенной
+/// очереди, идентичность помечена автономной для контракта `07`). Fail-secure к
+/// отсутствию ключа станции наследуется от `operator_profile::verify`/`load`.
+#[tauri::command]
+pub fn auth_unlock_autonomous(
+    app: AppHandle,
+    state: State<'_, AuthState>,
+    pin: Option<String>,
+) -> Result<AuthStatusView, String> {
+    let settings = load_settings(&app)?;
+    let enabled = settings.auth.operator.autonomous_offline.enabled;
+    let root = resolve_storage_root(&app, &settings)?;
+    let pin = pin.unwrap_or_default();
+
+    // Порядок проверок: режим → профиль → PIN. Ошибка ключа станции (нет
+    // passphrase/битый блоб) НЕ маскируется под «неверный PIN» — доводится до UI
+    // как ошибка (fail-secure, R-004/этап 13.5).
+    let pin_ok = if enabled {
+        operator_profile::verify(&root, settings.storage.key_source, pin.trim())
+            .map_err(|e| format!("не удалось проверить операторский профиль: {e}"))?
+    } else {
+        false
+    };
+    let profile_present = enabled && operator_profile::is_provisioned(&root);
+    autonomous_unlock_decision(enabled, profile_present, pin_ok).map_err(|e| e.to_string())?;
+
+    let profile = operator_profile::load(&root, settings.storage.key_source)
+        .map_err(|e| format!("не удалось прочитать операторский профиль: {e}"))?
+        .ok_or_else(|| AutonomousUnlockError::NotProvisioned.to_string())?;
+
+    {
+        let mut guard = state.0.lock().map_err(|_| "состояние входа повреждено".to_string())?;
+        *guard = Some(ActiveOperator {
+            operator_id: profile.operator_id.clone(),
+            full_name: profile.full_name.clone(),
+            role: profile.role.clone(),
+            access_token: None,
+            // Онлайн-входа не было — refresh-токена нет (тихий refresh его
+            // пропускает; связь появится → оператор войдёт онлайн штатно).
+            refresh_token: String::new(),
+            obtained_at_unix_ms: now_unix_ms(),
+            online: false,
+            autonomous: true,
         });
     }
     let status = status_view(&app, &state)?;
@@ -390,7 +516,8 @@ pub(crate) fn try_silent_refresh(app: &AppHandle) {
             Err(_) => return,
         };
         match guard.as_ref() {
-            Some(op) if !op.online => op.refresh_token.clone(),
+            // Автономная сессия (B-001) refresh-токена не имеет — пропускаем.
+            Some(op) if !op.online && !op.refresh_token.is_empty() => op.refresh_token.clone(),
             _ => return,
         }
     };
@@ -497,6 +624,27 @@ mod tests {
             offline_unlock_decision(&s, now, 24, "2468", true),
             Err(OfflineUnlockError::Expired)
         );
+    }
+
+    #[test]
+    fn autonomous_unlock_gated_by_flag_profile_and_pin() {
+        // Режим выключен → отказ независимо от профиля/PIN (обычная станция).
+        assert_eq!(
+            autonomous_unlock_decision(false, true, true),
+            Err(AutonomousUnlockError::Disabled)
+        );
+        // Включён, но профиль не провижинен → отказ.
+        assert_eq!(
+            autonomous_unlock_decision(true, false, true),
+            Err(AutonomousUnlockError::NotProvisioned)
+        );
+        // Включён, профиль есть, PIN неверен → отказ.
+        assert_eq!(
+            autonomous_unlock_decision(true, true, false),
+            Err(AutonomousUnlockError::WrongPin)
+        );
+        // Всё сошлось → старт разрешён.
+        assert_eq!(autonomous_unlock_decision(true, true, true), Ok(()));
     }
 
     #[test]

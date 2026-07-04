@@ -5,6 +5,7 @@
 //! системный трей собирается в [`crate::run`] (`setup`); эта деривация вынесена
 //! отдельной функцией, чтобы покрыть её юнит-тестом без нативного рантайма.
 
+use tauri::window::Color;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// Метка окна компакт-оверлея (одно на приложение).
@@ -16,6 +17,56 @@ const OVERLAY_URL: &str = "index.html?window=overlay";
 
 /// Заголовок приложения (для подписи трея).
 const APP_TITLE: &str = "Аудиопротокол";
+
+/// Фон окна оверлея — тёмная тема дизайн-системы (`src/styles/tokens.css`,
+/// `--dark: #1f1c16` → RGB 31/28/22). **R-006 (этап 13.6):** на Windows WebView2
+/// до первого рендера показывал **белую рамку** (дефолтный белый фон вьюпорта).
+/// Явный фон окна **и** webview-слоя (Tauri `background_color` красит оба)
+/// закрашивает вьюпорт в тёмный ещё до загрузки CSS — вспышки белого нет. Это
+/// косметическая константа кода (токен дизайн-системы), не бизнес-параметр
+/// реестра — как layout-константы метров (см. `configuration.md`, раздел 10.5).
+const OVERLAY_BG: Color = Color(0x1f, 0x1c, 0x16, 0xff);
+
+/// Спецификация окна оверлея — чистое описание конфигурации, вынесенное из
+/// команды ради юнит-теста (нативная сборка окна в CI без дисплея не исполняется,
+/// как трей; см. `docs/ui_adaptive.md`). Значения размера/фона — косметические
+/// константы кода, флаги — поведение окна.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlaySpec {
+    pub label: &'static str,
+    pub url: &'static str,
+    pub width: f64,
+    pub height: f64,
+    pub background: Color,
+    pub always_on_top: bool,
+    pub resizable: bool,
+    pub skip_taskbar: bool,
+    pub decorations: bool,
+    /// **R-006:** окно создаётся **без захвата фокуса** — иначе на Windows
+    /// новое `always_on_top`-окно перехватывало ввод, и старт/стоп в основном
+    /// окне переставали реагировать до ручного клика по нему. Оверлей — пассивный
+    /// индикатор поверх всех окон; фокус остаётся у основного окна.
+    pub focused: bool,
+}
+
+/// Конфигурация окна оверлея (единая точка правды для команды и теста).
+pub fn overlay_spec() -> OverlaySpec {
+    OverlaySpec {
+        label: OVERLAY_LABEL,
+        url: OVERLAY_URL,
+        // Компактно, но с запасом на режим проигрывателя (позиция + транспорт).
+        width: 300.0,
+        height: 210.0,
+        background: OVERLAY_BG,
+        always_on_top: true,
+        resizable: false,
+        skip_taskbar: true,
+        // Без системной рамки/кнопок: закрытие — своей кнопкой в окне,
+        // перемещение — за drag-полосу в самом окне (`data-tauri-drag-region`).
+        decorations: false,
+        focused: false,
+    }
+}
 
 /// Подпись системного трея по состоянию записи (этап 10.5, deliverable 2).
 /// Чистая функция — единственная тестируемая точка трея (нативный рендер иконки
@@ -49,16 +100,18 @@ pub fn open_compact_overlay(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
 
-    WebviewWindowBuilder::new(&app, OVERLAY_LABEL, WebviewUrl::App(OVERLAY_URL.into()))
+    let spec = overlay_spec();
+    WebviewWindowBuilder::new(&app, spec.label, WebviewUrl::App(spec.url.into()))
         .title("Статус записи")
-        // Компактно, но с запасом на режим проигрывателя (позиция + транспорт).
-        .inner_size(300.0, 210.0)
-        .always_on_top(true)
-        .resizable(false)
-        .skip_taskbar(true)
-        // Без системной рамки/кнопок: закрытие — своей кнопкой в окне,
-        // перемещение — за drag-полосу в самом окне (`data-tauri-drag-region`).
-        .decorations(false)
+        .inner_size(spec.width, spec.height)
+        // R-006: тёмный фон окна+webview убирает белую рамку WebView2 до рендера.
+        .background_color(spec.background)
+        .always_on_top(spec.always_on_top)
+        .resizable(spec.resizable)
+        .skip_taskbar(spec.skip_taskbar)
+        .decorations(spec.decorations)
+        // R-006: не забираем фокус — основное окно остаётся отзывчивым (старт/стоп).
+        .focused(spec.focused)
         .build()
         .map_err(|e| format!("не удалось открыть окно оверлея: {e}"))?;
     Ok(())
@@ -88,5 +141,26 @@ mod tests {
         assert_eq!(tray_tooltip("stopped"), "Аудиопротокол · Запись завершена");
         // Неизвестное состояние падает в нейтральную готовность (не паникует).
         assert_eq!(tray_tooltip("bogus"), "Аудиопротокол · Готов к записи");
+    }
+
+    // R-006 (этап 13.6): чистая логика окна оверлея. Нативная сборка/рендер/фокус
+    // на Windows — по ручному чек-листу (`docs/ui_adaptive.md`), в CI без дисплея
+    // не исполняется. Здесь фиксируем контракт спецификации окна.
+    #[test]
+    fn overlay_spec_fixes_white_frame_and_focus_steal() {
+        let spec = overlay_spec();
+        // Фон окна — тёмный токен дизайн-системы (--dark #1f1c16), непрозрачный:
+        // WebView2 не мигает белым до первого рендера.
+        assert_eq!(spec.background, Color(0x1f, 0x1c, 0x16, 0xff));
+        // Окно не забирает фокус на открытии → старт/стоп в основном окне живы.
+        assert!(!spec.focused);
+        // Поведение окна не деградирует: поверх всех, без рамки, вне таскбара.
+        assert!(spec.always_on_top);
+        assert!(!spec.decorations);
+        assert!(spec.skip_taskbar);
+        assert!(!spec.resizable);
+        // Маршрут окна — тот же `index.html` с меткой `?window=overlay`.
+        assert_eq!(spec.label, OVERLAY_LABEL);
+        assert_eq!(spec.url, "index.html?window=overlay");
     }
 }

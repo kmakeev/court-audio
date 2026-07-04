@@ -16,6 +16,7 @@ pub mod crypto;
 pub mod db;
 pub mod export;
 pub mod manifest;
+pub mod operator_profile;
 pub mod reconcile;
 pub mod retention;
 pub mod session_comment;

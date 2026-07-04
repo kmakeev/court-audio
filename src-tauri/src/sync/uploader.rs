@@ -104,6 +104,8 @@ pub fn upload_session(
                 channels: session.channels,
                 bit_depth: session.bit_depth,
                 track_count: manifest.session.track_count,
+                // B-001 (этап 13.6): признак автономного старта → серверу.
+                autonomous_offline: session.autonomous_offline,
             };
             let id = transport.register_session(token, &meta)?;
             queue::set_recording_id(store, session_id, &id)?;

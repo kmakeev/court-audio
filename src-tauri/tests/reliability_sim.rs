@@ -214,6 +214,7 @@ fn journal_records_lifecycle_for_recovery() {
         segment_seconds: 1,
         operator_id: String::new(),
         station_id: String::new(),
+        autonomous_offline: false,
     })
     .unwrap();
     j.append(&JournalRecord::Stopped).unwrap();

@@ -14,7 +14,7 @@ use super::StoreError;
 
 /// Текущая версия схемы манифеста. При изменении таблиц — инкремент + ветка в
 /// [`migrate`].
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Открыть (создав при необходимости) манифест-БД по пути и применить миграции.
 pub fn open(path: &Path) -> Result<Connection, StoreError> {
@@ -210,6 +210,16 @@ pub fn migrate(conn: &Connection) -> Result<(), StoreError> {
             );",
         )?;
         conn.pragma_update(None, "user_version", 5)?;
+    }
+    if version < 6 {
+        // Этап 13.6 (B-001): автономный офлайн-старт по провижиненному PIN.
+        // Признак `autonomous_offline` доезжает из журнала (`SessionStarted`) до
+        // контракта `07` (сервер помечает запись). Аддитивно: легаси-сессии — 0
+        // (обычный онлайн/кэш-старт).
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN autonomous_offline INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        conn.pragma_update(None, "user_version", 6)?;
     }
     Ok(())
 }

@@ -207,6 +207,8 @@ fn start_single(
     // станции. Пишем в журнал (write-ahead), чтобы доехала до манифеста/выгрузки.
     let operator_id = operator_identity(app);
     let station_id = crate::ipc::auth_cmds::station_identity();
+    // B-001 (этап 13.6): сессия открыта автономным офлайн-стартом по PIN?
+    let autonomous_offline = crate::ipc::auth_cmds::current_operator_autonomous(app);
 
     // Журнал сессии (write-ahead): открываем до старта, сразу пишем SessionStarted.
     let journal = Journal::open(output_dir).map_err(|e| e.to_string())?;
@@ -221,6 +223,7 @@ fn start_single(
             segment_seconds: settings.recorder.segment_seconds,
             operator_id: operator_id.clone(),
             station_id,
+            autonomous_offline,
         })
         .map_err(|e| e.to_string())?;
     }
@@ -284,6 +287,7 @@ fn start_multichannel(
     // Идентичность (этап 10.3): оператор из сессии входа, станция — учётка станции.
     let operator_id = operator_identity(app);
     let station_id = crate::ipc::auth_cmds::station_identity();
+    let autonomous_offline = crate::ipc::auth_cmds::current_operator_autonomous(app);
 
     // Карта дорожек (для реконсиляции и UI) + корневой журнал сессии.
     let map = track_map_from_resolved(tracks);
@@ -298,6 +302,7 @@ fn start_multichannel(
             segment_seconds: settings.recorder.segment_seconds,
             operator_id: operator_id.clone(),
             station_id: station_id.clone(),
+            autonomous_offline,
         })
         .map_err(|e| e.to_string())?;
     }
@@ -329,6 +334,7 @@ fn start_multichannel(
             segment_seconds: settings.recorder.segment_seconds,
             operator_id: operator_id.clone(),
             station_id: station_id.clone(),
+            autonomous_offline,
         })
         .map_err(|e| e.to_string())?;
         let tj = Arc::new(Mutex::new(tj));

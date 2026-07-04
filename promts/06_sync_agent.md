@@ -100,6 +100,12 @@
   /audio/recordings/{id}/upload/part/{track_id}/{part_index}/`. Докачка/
   идемпотентность — по `(track_id, part_index)`.
 - **`SessionMeta`** дополнен `track_count`.
+- **`SessionMeta`** дополнен **опциональным** `autonomous_offline` (B-001, этап
+  13.6): клиент шлёт признак **только** при автономном офлайн-старте (изолированный
+  зал, провижиненный PIN, `skip_serializing_if` при `false` — обычные станции
+  payload не меняют). Сервер `07` **доверяет** идентичности и **помечает** запись
+  (см. `07_backend_integration.md`, п. 5; клиентская часть —
+  `src-tauri/src/sync/client.rs`).
 
 **Синхронно с этим правится серверный `07_backend_integration.md`** (приём
 мультитрека в `ex_system`) — единый источник истины контракта. Реестр параметров

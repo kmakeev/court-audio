@@ -1,13 +1,17 @@
 import { useCallback, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BlockHead, Button, Card, CriticalNotice, Field, Tag } from '../design';
-import { authLogin, authUnlockOffline } from '../lib/core';
+import { authLogin, authUnlockAutonomous, authUnlockOffline } from '../lib/core';
 import { useAuth } from '../lib/auth-context';
 
 // Экран входа оператора (этап 10.3). Онлайн-вход по логину/паролю (JWT ex_system)
 // + PIN, который затем разблокирует оффлайн-старт. Когда доступна валидная
 // кэшированная сессия без связи — предлагает оффлайн-разблокировку по PIN.
 // Управление учётками/ролями/паролями — в ex_system; станция лишь входит.
+//
+// B-001 (этап 13.6): в изолированном зале с провижиненным операторским профилем
+// (флаг `auth.operator.autonomous_offline`) доступен **автономный** старт по PIN
+// без единого онлайн-входа — идентичность из провижининг-профиля.
 
 export function LoginScreen() {
   const navigate = useNavigate();
@@ -15,11 +19,14 @@ export function LoginScreen() {
 
   const pinRequired = status?.pin_required ?? true;
   const offlineAvailable = status ? status.offline_cached && !status.operator : false;
+  // Автономный старт (B-001): изолированный зал, онлайн-входа не было ни разу.
+  const autonomousAvailable = status ? status.autonomous_available && !status.operator : false;
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [offlinePin, setOfflinePin] = useState('');
+  const [autonomousPin, setAutonomousPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // При наличии кэша станция по умолчанию предлагает оффлайн-вход; онлайн-форму
@@ -28,7 +35,9 @@ export function LoginScreen() {
   const [showOnlineForm, setShowOnlineForm] = useState(false);
 
   const showOffline = offlineAvailable && !showOnlineForm;
-  const showOnline = !showOffline;
+  // Автономный старт — когда нет кэша онлайн-сессии, но профиль зала провижинен.
+  const showAutonomous = !showOffline && autonomousAvailable && !showOnlineForm;
+  const showOnline = !showOffline && !showAutonomous;
 
   const goHome = useCallback(() => {
     refresh();
@@ -60,6 +69,20 @@ export function LoginScreen() {
       setBusy(false);
     }
   }, [offlinePin, pinRequired, goHome]);
+
+  // Автономный старт (B-001): PIN всегда обязателен (иная аутентификации нет).
+  const onAutonomous = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await authUnlockAutonomous(autonomousPin);
+      goHome();
+    } catch (e) {
+      setError(describeError(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [autonomousPin, goHome]);
 
   return (
     <div
@@ -130,6 +153,51 @@ export function LoginScreen() {
           </Card>
         )}
 
+        {showAutonomous && (
+          <Card>
+            <BlockHead
+              numeral=""
+              title="Автономный старт"
+              hint="Изолированный зал: вход по PIN, заданному при развёртывании"
+            />
+            <div style={{ marginTop: 8, marginBottom: 12 }}>
+              <Tag tone="accent">Провижиненный оператор зала</Tag>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void onAutonomous();
+              }}
+              style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+            >
+              <Field
+                label="PIN"
+                name="autonomousPin"
+                type="password"
+                inputMode="numeric"
+                value={autonomousPin}
+                onChange={(e) => setAutonomousPin(e.target.value)}
+              />
+              <Button variant="primary" type="submit" disabled={busy || !autonomousPin}>
+                {busy ? 'Вход…' : 'Войти'}
+              </Button>
+            </form>
+            <p
+              style={{
+                marginTop: 14,
+                textAlign: 'center',
+                fontSize: 13,
+                color: 'var(--muted)',
+              }}
+            >
+              Есть связь с сервером?{' '}
+              <TextLink onClick={() => setShowOnlineForm(true)}>
+                Войти по учётной записи
+              </TextLink>
+            </p>
+          </Card>
+        )}
+
         {showOnline && (
           <Card>
             <BlockHead
@@ -192,6 +260,21 @@ export function LoginScreen() {
                 Нет связи с сервером?{' '}
                 <TextLink onClick={() => setShowOnlineForm(false)}>
                   Оффлайн-вход по PIN
+                </TextLink>
+              </p>
+            )}
+            {autonomousAvailable && !offlineAvailable && (
+              <p
+                style={{
+                  marginTop: 14,
+                  textAlign: 'center',
+                  fontSize: 13,
+                  color: 'var(--muted)',
+                }}
+              >
+                Изолированный зал?{' '}
+                <TextLink onClick={() => setShowOnlineForm(false)}>
+                  Автономный старт по PIN
                 </TextLink>
               </p>
             )}

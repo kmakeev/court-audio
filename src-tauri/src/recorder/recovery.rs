@@ -322,6 +322,7 @@ mod tests {
             segment_seconds: 30,
             operator_id: String::new(),
             station_id: String::new(),
+            autonomous_offline: false,
         })
         .unwrap();
         // Завершённая сессия: журнал со Stopped.
@@ -335,6 +336,7 @@ mod tests {
             segment_seconds: 30,
             operator_id: String::new(),
             station_id: String::new(),
+            autonomous_offline: false,
         })
         .unwrap();
         j2.append(&JournalRecord::Stopped).unwrap();

@@ -427,6 +427,30 @@ impl Default for OfflinePinSettings {
     }
 }
 
+/// `auth.operator.autonomous_offline` — автономный офлайн-старт по провижиненному
+/// PIN в **изолированном зале** (этап 13.6 — B-001). Ослабляет требование
+/// онлайн-входа, поэтому **только для явно провижиненных залов** и **выключено по
+/// умолчанию** (обычные станции вход не ослабляют). Идентичность — из
+/// операторского провижининг-профиля (`store::operator_profile`), а не из
+/// онлайн-сессии. Согласовано с заказчиком (см. `CLAUDE.md`/`docs/auth.md`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutonomousOfflineSettings {
+    pub enabled: bool,
+}
+
+// Явный `Default` (а не derive) — единый стиль реестра в этом файле: значение по
+// умолчанию цитирует `configuration.md` рядом. `false` совпадает с
+// `bool::default()`, поэтому глушим `derivable_impls`.
+#[allow(clippy::derivable_impls)]
+impl Default for AutonomousOfflineSettings {
+    fn default() -> Self {
+        Self {
+            // configuration.md: auth.operator.autonomous_offline.enabled = false
+            enabled: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OperatorAuthSettings {
     pub required_to_start: bool,
@@ -435,6 +459,10 @@ pub struct OperatorAuthSettings {
     /// `#[serde(default)]`: конфиги до 10.3 грузятся и получают дефолт реестра.
     #[serde(default)]
     pub offline_pin: OfflinePinSettings,
+    /// `auth.operator.autonomous_offline` — автономный офлайн-старт (этап 13.6).
+    /// `#[serde(default)]`: конфиги до 13.6 грузятся с выключенным режимом.
+    #[serde(default)]
+    pub autonomous_offline: AutonomousOfflineSettings,
 }
 
 impl Default for OperatorAuthSettings {
@@ -445,6 +473,7 @@ impl Default for OperatorAuthSettings {
             // configuration.md: auth.operator.cached_session_hours = 24
             cached_session_hours: 24,
             offline_pin: OfflinePinSettings::default(),
+            autonomous_offline: AutonomousOfflineSettings::default(),
         }
     }
 }

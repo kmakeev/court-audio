@@ -184,4 +184,38 @@ Overlay корректно рендерится на Windows (без белой 
 
 ## Решено
 
-*(заполняется по итогам согласования открытых вопросов B-001 — до реализации.)*
+Открытые вопросы B-001 согласованы с заказчиком (2026-07-04); отражено в
+[`../CLAUDE.md`](../CLAUDE.md) и [`../docs/auth.md`](../docs/auth.md).
+
+1. **Источник идентичности офлайн — провижининг-профиль зала.** `operator_id`/
+   `station_id`/ФИО/роль + хеш PIN (Argon2id) в зашифрованном `operator_profile.enc`
+   (ключ станции), по образцу админ-PIN. Реализация —
+   [`../src-tauri/src/store/operator_profile.rs`](../src-tauri/src/store/operator_profile.rs),
+   провижининг из env в [`../src-tauri/src/lib.rs`](../src-tauri/src/lib.rs)
+   (рядом с админ-PIN), env — в [`../docs/packaging.md`](../docs/packaging.md).
+2. **Ослабление «оператор обязан авторизоваться» — разрешено под флагом.** Новый
+   ключ реестра `auth.operator.autonomous_offline.enabled` (дефолт **`false`**,
+   только для явно провижиненных изолированных залов). Отступление зафиксировано в
+   `CLAUDE.md`. Обычные станции без флага — поведение не изменилось.
+3. **Приём на сервере — флаг «офлайн-провижен» + доверие.** `SessionMeta`
+   дополнен опциональным `autonomous_offline` (клиент шлёт только при `true`);
+   сервер доверяет `operator_id`/`station_id` и помечает `AudioRecording`.
+   Контракт — синхронно в `promts/06_sync_agent.md`/`promts/07_backend_integration.md`
+   (+ `ex_system`: поле/миграция `AudioRecording.autonomous_offline` — серверная
+   часть исполняется в репозитории `ex_system`).
+4. **Докет дел офлайн — только ручной ввод №** (механизм этапа `05`); предзагрузка
+   `case_cache` для автономного зала **не вводится**.
+5. **Область действия флага** — только провижиненные залы (ключ реестра из п. 2,
+   дефолт «выкл.»).
+
+Разблокировка — `auth_unlock_autonomous(pin)`
+([`../src-tauri/src/ipc/auth_cmds.rs`](../src-tauri/src/ipc/auth_cmds.rs)); гейт по
+флагу → провижиненный профиль → сверка PIN (const-time) → оффлайн-сессия с
+идентичностью из профиля. Fail-secure к отсутствию ключа станции наследуется от
+`store::crypto` (R-004/этап 13.5). Тесты: `store::operator_profile` (провижининг →
+проверка PIN без сети; неверный PIN/нет ключа → fail-secure),
+`autonomous_unlock_decision` (гейт флага/профиля/PIN), фронт — `Login.test.tsx`.
+
+**R-006** реализован независимо (белая рамка/фокус overlay на Windows) — см.
+`ipc/ui_cmds.rs` (`overlay_spec`: тёмный `background_color` + `focused(false)`),
+`lib/window-route.ts` (роутинг окна), ручной чек-лист в `docs/ui_adaptive.md`.

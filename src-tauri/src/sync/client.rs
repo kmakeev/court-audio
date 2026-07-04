@@ -63,10 +63,21 @@ pub struct SessionMeta {
     /// Число дорожек записи (многоканал по ролям — этап 09; для v1 = 1).
     #[serde(default = "one_track")]
     pub track_count: u32,
+    /// Автономный офлайн-старт по провижиненному PIN (этап 13.6 — B-001): сервер
+    /// помечает запись «офлайн-провижен» и принимает `operator_id`/`station_id`
+    /// как есть (доверие по ключу станции-транспорта; контракт `07`). Обычные
+    /// станции этого признака **не шлют** (`skip_serializing_if` при `false`) —
+    /// их payload регистрации не меняется.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub autonomous_offline: bool,
 }
 
 fn one_track() -> u32 {
     1
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// Результат серверной верификации целостности (`POST /audio/recordings/<id>/verify/`).
@@ -263,5 +274,32 @@ mod tests {
     fn transport_error_constructors() {
         assert_eq!(TransportError::transient("x").kind, ErrorKind::Transient);
         assert_eq!(TransportError::permanent("x").kind, ErrorKind::Permanent);
+    }
+
+    // B-001 (этап 13.6): обычная станция payload регистрации НЕ меняет — признак
+    // `autonomous_offline` при `false` в JSON отсутствует; при автономном старте —
+    // присутствует со значением `true`.
+    #[test]
+    fn session_meta_omits_autonomous_flag_unless_set() {
+        let base = SessionMeta {
+            session_id: "s1".into(),
+            station_id: "st".into(),
+            operator_id: "42".into(),
+            adjudication_ref: None,
+            sample_rate_hz: 44_100,
+            channels: 1,
+            bit_depth: 16,
+            track_count: 1,
+            autonomous_offline: false,
+        };
+        let json = serde_json::to_string(&base).unwrap();
+        assert!(!json.contains("autonomous_offline"), "payload: {json}");
+
+        let autonomous = SessionMeta {
+            autonomous_offline: true,
+            ..base
+        };
+        let json = serde_json::to_string(&autonomous).unwrap();
+        assert!(json.contains("\"autonomous_offline\":true"), "payload: {json}");
     }
 }

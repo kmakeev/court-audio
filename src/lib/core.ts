@@ -744,6 +744,13 @@ export interface AuthStatus {
   cache_expires_at_unix_ms: number | null;
   /** Требуется ли PIN для оффлайн-разблокировки. */
   pin_required: boolean;
+  /**
+   * Доступен ли **автономный** офлайн-старт (B-001, этап 13.6): режим включён
+   * флагом реестра `auth.operator.autonomous_offline.enabled` **и**
+   * операторский профиль зала провижинен, пока не вошли. Изолированный зал без
+   * онлайн-входа.
+   */
+  autonomous_available: boolean;
 }
 
 /** Вход оператора: логин/пароль (+PIN для оффлайн-разблокировки) → JWT. */
@@ -758,6 +765,14 @@ export function authLogin(
 /** Оффлайн-разблокировка по кэшированной сессии (окно + PIN). */
 export function authUnlockOffline(pin?: string): Promise<AuthStatus> {
   return invoke<AuthStatus>('auth_unlock_offline', { pin: pin ?? null });
+}
+
+/**
+ * Автономный офлайн-старт по провижиненному PIN (B-001, этап 13.6): изолированный
+ * зал без онлайн-входа. Гейт — флаг реестра `auth.operator.autonomous_offline`.
+ */
+export function authUnlockAutonomous(pin?: string): Promise<AuthStatus> {
+  return invoke<AuthStatus>('auth_unlock_autonomous', { pin: pin ?? null });
 }
 
 /** Тихий refresh при возврате онлайн (без действий оператора). */

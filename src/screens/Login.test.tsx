@@ -114,6 +114,23 @@ describe('LoginScreen', () => {
     expect(screen.queryByText('ЭКРАН ЗАПИСИ')).not.toBeInTheDocument();
   });
 
+  it('автономный старт (B-001): вход по провижиненному PIN без онлайн-входа', async () => {
+    // Изолированный зал: кэша онлайн-сессии нет, но профиль зала провижинен.
+    setInvoke('auth_status', () => loggedOut({ autonomous_available: true }));
+    const unlock = vi.fn(() => authStatusFixture({ online: false }));
+    setInvoke('auth_unlock_autonomous', unlock);
+
+    renderLogin();
+
+    expect(await screen.findByText('Автономный старт')).toBeInTheDocument();
+    const pinField = await screen.findByLabelText('PIN');
+    fireEvent.change(pinField, { target: { value: '2468' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
+
+    await waitFor(() => expect(screen.getByText('ЭКРАН ЗАПИСИ')).toBeInTheDocument());
+    expect(unlock).toHaveBeenCalledWith({ pin: '2468' });
+  });
+
   it('показывает только одну форму и переключается по ссылке в обе стороны', async () => {
     setInvoke('auth_status', () => loggedOut({ offline_cached: true }));
 

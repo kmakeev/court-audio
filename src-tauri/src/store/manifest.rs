@@ -118,6 +118,11 @@ pub struct SessionRecord {
     pub local_purged_at_unix_ms: Option<u64>,
     /// Операторская пауза догрузки (`06`): планировщик пропускает такие сессии.
     pub upload_paused: bool,
+    /// Сессия начата автономным офлайн-стартом по провижиненному PIN (этап 13.6
+    /// — B-001); доезжает до контракта `07` (сервер помечает запись). `false` для
+    /// обычного онлайн/кэш-старта и легаси-сессий.
+    #[serde(default)]
+    pub autonomous_offline: bool,
 }
 
 impl SessionRecord {
@@ -150,6 +155,7 @@ impl SessionRecord {
             confirmed_at_unix_ms: None,
             local_purged_at_unix_ms: None,
             upload_paused: false,
+            autonomous_offline: false,
         }
     }
 }
@@ -230,8 +236,9 @@ impl ManifestStore {
                 id, dir, started_at_unix_ms, status, station_id, operator_id,
                 adjudication_ref, sample_rate_hz, channels, bit_depth,
                 final_chain_link, upload_status, server_integrity_verified,
-                confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused
-            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+                confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused,
+                autonomous_offline
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
             ON CONFLICT(id) DO UPDATE SET
                 dir=excluded.dir,
                 started_at_unix_ms=excluded.started_at_unix_ms,
@@ -247,7 +254,8 @@ impl ManifestStore {
                 server_integrity_verified=excluded.server_integrity_verified,
                 confirmed_at_unix_ms=excluded.confirmed_at_unix_ms,
                 local_purged_at_unix_ms=excluded.local_purged_at_unix_ms,
-                upload_paused=excluded.upload_paused",
+                upload_paused=excluded.upload_paused,
+                autonomous_offline=excluded.autonomous_offline",
             rusqlite::params![
                 s.id,
                 s.dir,
@@ -265,6 +273,7 @@ impl ManifestStore {
                 s.confirmed_at_unix_ms.map(|v| v as i64),
                 s.local_purged_at_unix_ms.map(|v| v as i64),
                 s.upload_paused as i64,
+                s.autonomous_offline as i64,
             ],
         )?;
         Ok(())
@@ -612,7 +621,8 @@ impl ManifestStore {
                 "SELECT id, dir, started_at_unix_ms, status, station_id, operator_id,
                         adjudication_ref, sample_rate_hz, channels, bit_depth,
                         final_chain_link, upload_status, server_integrity_verified,
-                        confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused
+                        confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused,
+                        autonomous_offline
                  FROM sessions WHERE id = ?1",
                 [session_id],
                 map_session,
@@ -627,7 +637,8 @@ impl ManifestStore {
             "SELECT id, dir, started_at_unix_ms, status, station_id, operator_id,
                     adjudication_ref, sample_rate_hz, channels, bit_depth,
                     final_chain_link, upload_status, server_integrity_verified,
-                    confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused
+                    confirmed_at_unix_ms, local_purged_at_unix_ms, upload_paused,
+                    autonomous_offline
              FROM sessions ORDER BY started_at_unix_ms DESC",
         )?;
         let rows = stmt.query_map([], map_session)?;
@@ -744,6 +755,7 @@ fn map_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<SessionRecord
             confirmed_at_unix_ms: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
             local_purged_at_unix_ms: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
             upload_paused: row.get::<_, i64>(15)? != 0,
+            autonomous_offline: row.get::<_, i64>(16)? != 0,
         })
     })();
     Ok(parsed)

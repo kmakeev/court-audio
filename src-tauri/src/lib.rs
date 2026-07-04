@@ -111,6 +111,19 @@ pub fn run() {
                                 ) {
                                     eprintln!("ВНИМАНИЕ: не удалось провизионировать админ-PIN: {e}");
                                 }
+                                // B-001 (этап 13.6): провижининг операторского
+                                // профиля зала для автономного офлайн-старта —
+                                // только для явно провижиненных изолированных
+                                // залов (флаг реестра, дефолт «выкл.»).
+                                if settings.auth.operator.autonomous_offline.enabled {
+                                    if let Err(e) = store::operator_profile::provision_from_env_if_absent(
+                                        &root,
+                                        settings.storage.key_source,
+                                        settings.auth.operator.offline_pin.min_length,
+                                    ) {
+                                        eprintln!("ВНИМАНИЕ: не удалось провизионировать операторский профиль зала: {e}");
+                                    }
+                                }
                             }
                         }
                     }
@@ -141,6 +154,7 @@ pub fn run() {
             ipc::auth_cmds::auth_logout,
             ipc::auth_cmds::auth_status,
             ipc::auth_cmds::auth_unlock_offline,
+            ipc::auth_cmds::auth_unlock_autonomous,
             ipc::auth_cmds::auth_reconnect,
             ipc::admin_cmds::admin_status,
             ipc::admin_cmds::admin_unlock,

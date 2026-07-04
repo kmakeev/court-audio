@@ -102,6 +102,7 @@ export function authStatusFixture(over: Partial<AuthStatus> = {}): AuthStatus {
     offline_cached: false,
     cache_expires_at_unix_ms: 1_700_086_400_000,
     pin_required: true,
+    autonomous_available: false,
     ...over,
   };
 }

@@ -90,6 +90,11 @@ pub fn reconcile_session(store: &ManifestStore, dir: &Path) -> Result<Option<Str
     if rec.station_id.is_empty() && !meta.station_id.is_empty() {
         rec.station_id = meta.station_id.clone();
     }
+    // Автономный офлайн-старт (B-001, этап 13.6): журнал — write-ahead источник.
+    // Ставим признак, когда журнал его несёт (не затираем уже помеченную запись).
+    if meta.autonomous_offline {
+        rec.autonomous_offline = true;
+    }
     rec.status = status;
     store.insert_session(&rec)?;
 
@@ -309,6 +314,7 @@ mod tests {
                 segment_seconds: 30,
                 operator_id: "42".into(),
                 station_id: "station-A".into(),
+                autonomous_offline: false,
             })
             .unwrap();
         let mut files = Vec::new();
@@ -390,6 +396,7 @@ mod tests {
                 segment_seconds: 30,
                 operator_id: String::new(),
                 station_id: String::new(),
+                autonomous_offline: false,
             })
             .unwrap();
 
@@ -423,6 +430,7 @@ mod tests {
                 segment_seconds: 30,
                 operator_id: String::new(),
                 station_id: String::new(),
+                autonomous_offline: false,
             })
             .unwrap();
             for index in 1..=n {

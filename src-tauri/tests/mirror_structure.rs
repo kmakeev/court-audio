@@ -67,6 +67,7 @@ fn started(channels: u16) -> JournalRecord {
         segment_seconds: 1,
         operator_id: "op-1".into(),
         station_id: "station-A".into(),
+        autonomous_offline: false,
     }
 }
 

@@ -43,6 +43,13 @@ pub enum JournalRecord {
         /// — как у `operator_id`.
         #[serde(default)]
         station_id: String,
+        /// Сессия начата **автономным офлайн-стартом** по провижиненному PIN
+        /// (этап 13.6 — B-001): идентичность из провижининг-профиля, а не из
+        /// онлайн-входа. Write-ahead-признак доезжает до контракта `07` (сервер
+        /// помечает запись). `#[serde(default)]` — журналы до 13.6 читаются как
+        /// `false` (обычный онлайн/кэш-старт).
+        #[serde(default)]
+        autonomous_offline: bool,
     },
     /// Открыт новый сегмент (имя файла фиксируем до записи данных).
     SegmentStarted {
@@ -145,6 +152,9 @@ pub struct SessionMeta {
     pub operator_id: String,
     /// Идентичность станции (этап 10.3); пусто в журналах до 10.3.
     pub station_id: String,
+    /// Автономный офлайн-старт по провижиненному PIN (этап 13.6 — B-001);
+    /// `false` в журналах до 13.6.
+    pub autonomous_offline: bool,
 }
 
 /// Завершённый сегмент по данным журнала.
@@ -197,6 +207,7 @@ pub fn replay(path: &Path) -> std::io::Result<ReplayState> {
                 segment_seconds,
                 operator_id,
                 station_id,
+                autonomous_offline,
             } => {
                 state.started = Some(SessionMeta {
                     started_at_unix_ms,
@@ -206,6 +217,7 @@ pub fn replay(path: &Path) -> std::io::Result<ReplayState> {
                     segment_seconds,
                     operator_id,
                     station_id,
+                    autonomous_offline,
                 });
             }
             JournalRecord::SegmentCompleted {
@@ -242,6 +254,7 @@ mod tests {
             segment_seconds: 30,
             operator_id: "42".into(),
             station_id: "station-A".into(),
+            autonomous_offline: false,
         }
     }
 
