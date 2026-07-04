@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { BlockHead, Button, Card, Field, screenStackStyle, Select, Tag } from '../design';
+import { BlockHead, Button, Card, screenStackStyle, Select, Tag } from '../design';
 import { listAudioDevices, type DeviceInfo } from '../lib/core';
 import { getSettings, saveSettings, type Settings } from '../lib/settings';
 import {
   describeError,
   Grid,
   LabeledWithTip,
+  ListField,
   NumField,
   parseNumberList,
   SectionTitle,
@@ -76,6 +77,13 @@ export function SettingsScreen() {
 
   const errors = settings ? validateOperator(settings) : {};
   const hasErrors = Object.keys(errors).length > 0;
+  // Многоканал активен, когда администратор включил режим И задал карту дорожек
+  // (то же условие, что в ядре — ipc/audio_cmds::start_capture). В этом режиме
+  // единый выбор устройства ввода не участвует в захвате: источник каждой
+  // дорожки берётся из карты (admin-скоуп). Поле отключаем, чтобы не вводить в
+  // заблуждение (R-008, этап 13.2).
+  const multichannelActive =
+    !!settings && settings.audio.multichannel.enabled && settings.audio.tracks.length > 0;
 
   async function onSave() {
     if (!settings || hasErrors) return;
@@ -113,16 +121,28 @@ export function SettingsScreen() {
             <Grid>
               <LabeledWithTip
                 label="Устройство ввода"
-                tip="С какого микрофона/интерфейса вести запись. «Системное по умолчанию» — устройство, выбранное в ОС. Если сохранённое устройство сейчас не подключено, оно помечено «не подключено» — верните его или выберите другое."
+                tip={
+                  multichannelActive
+                    ? 'Включена многоканальная запись: источник каждой дорожки задаёт карта дорожек в разделе «Многоканальная запись» экрана «Администрирование». Единое устройство ввода в этом режиме не используется.'
+                    : 'С какого микрофона/интерфейса вести запись. «Системное по умолчанию» — устройство, выбранное в ОС. Если сохранённое устройство сейчас не подключено, оно помечено «не подключено» — верните его или выберите другое.'
+                }
               >
                 <Select
                   ariaLabel="Устройство ввода"
                   value={settings.audio.device ?? ''}
+                  disabled={multichannelActive}
                   onChange={(v) =>
                     update((d) => { d.audio.device = v === '' ? null : v; })
                   }
                   options={deviceOptions(devices, settings.audio.device)}
                 />
+                {multichannelActive && (
+                  <span style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.4 }}>
+                    Многоканальный режим включён администратором — устройства дорожек
+                    настраиваются в «Администрировании». Единый выбор устройства здесь
+                    отключён.
+                  </span>
+                )}
               </LabeledWithTip>
             </Grid>
           </Card>
@@ -134,17 +154,19 @@ export function SettingsScreen() {
               hint="Справочники живой разметки заседания. Доступны и без многоканала — оператор ведёт их заранее."
             />
             <Grid>
-              <Field
+              <ListField
                 label="Категории закладок (через запятую)"
                 placeholder="Закладка, Инцидент, Перерыв, Прочее"
-                value={settings.markers.categories.join(', ')}
-                onChange={(e) => update((d) => { d.markers.categories = splitList(e.target.value); })}
+                value={settings.markers.categories}
+                parse={splitList}
+                onCommit={(v) => update((d) => { d.markers.categories = v; })}
               />
-              <Field
+              <ListField
                 label="Роли говорящих (через запятую)"
                 placeholder="judge, clerk, prosecution, defense, witness, room"
-                value={settings.audio.roles.join(', ')}
-                onChange={(e) => update((d) => { d.audio.roles = splitList(e.target.value); })}
+                value={settings.audio.roles}
+                parse={splitList}
+                onCommit={(v) => update((d) => { d.audio.roles = v; })}
               />
             </Grid>
           </Card>
@@ -168,14 +190,13 @@ export function SettingsScreen() {
                 error={errors['position_hz']}
                 onChange={(v) => update((d) => { d.player.position_update_hz = v; })}
               />
-              <Field
+              <ListField
                 label="Скорости (через запятую)"
                 placeholder="0.5, 0.75, 1.0, 1.25, 1.5, 2.0"
-                value={settings.player.playback_rates.join(', ')}
+                value={settings.player.playback_rates}
+                parse={parseNumberList}
                 error={errors['playback_rates']}
-                onChange={(e) =>
-                  update((d) => { d.player.playback_rates = parseNumberList(e.target.value); })
-                }
+                onCommit={(v) => update((d) => { d.player.playback_rates = v; })}
               />
             </Grid>
           </Card>

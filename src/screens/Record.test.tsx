@@ -305,6 +305,61 @@ describe('RecordScreen', () => {
     );
   });
 
+  it('R-005: предупреждает, если сохранённое устройство отсутствует', async () => {
+    wireDefaults();
+    // Конфиг перенесён с другой машины: устройство «Микрофон MacBook Air» тут
+    // отсутствует (в списке только «Микрофон зала»).
+    setInvoke('get_settings', () => {
+      const s = settingsFixture();
+      s.audio.device = 'Микрофон MacBook Air';
+      return s;
+    });
+    renderRecord();
+    await screen.findByText('Готов к записи');
+
+    // Явный баннер вместо молчаливой тишины + ссылка на настройки.
+    expect(
+      await screen.findByText(/Выбранный микрофон «Микрофон MacBook Air» не найден/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Открыть настройки/)).toBeInTheDocument();
+  });
+
+  it('R-005: не предупреждает, когда сохранённое устройство присутствует', async () => {
+    wireDefaults();
+    setInvoke('get_settings', () => {
+      const s = settingsFixture();
+      s.audio.device = 'Микрофон зала'; // есть в списке
+      return s;
+    });
+    renderRecord();
+    await screen.findByText('Готов к записи');
+    expect(screen.queryByText(/не найден/)).not.toBeInTheDocument();
+  });
+
+  it('R-008: при многоканале выбор устройства ввода отключён с подсказкой', async () => {
+    wireDefaults();
+    setInvoke('get_settings', () => {
+      const s = settingsFixture();
+      s.audio.multichannel.enabled = true;
+      s.audio.tracks = [
+        { device: null, channel_index: 0, role: 'judge', label: 'Судья' },
+        { device: null, channel_index: 1, role: 'defense', label: 'Защита' },
+      ];
+      return s;
+    });
+    renderRecord();
+    await screen.findByText('Готов к записи');
+
+    // Единый выбор устройства отключён — источник задаёт карта дорожек (админ).
+    const device = await screen.findByLabelText('Устройство ввода');
+    expect(device).toBeDisabled();
+    expect(
+      screen.getByText(/источник каждой дорожки задаёт карта[\s\S]*дорожек в «Администрировании»/i),
+    ).toBeInTheDocument();
+    // Баннер «устройство не найдено» в этом режиме не показываем.
+    expect(screen.queryByText(/не найден/)).not.toBeInTheDocument();
+  });
+
   it('привязывает дело к стартовавшей сессии (ручной ввод → bind_session_case)', async () => {
     wireDefaults();
     const bind = vi.fn();

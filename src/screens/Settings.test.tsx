@@ -51,14 +51,47 @@ describe('SettingsScreen (оператор)', () => {
     const roles = await screen.findByLabelText('Роли говорящих (через запятую)');
     const categories = await screen.findByLabelText('Категории закладок (через запятую)');
 
+    // Поля-списки правят сырой текст и парсят его в массив на blur (R-007) —
+    // имитируем выход из поля перед сохранением (в браузере фокус уходит на
+    // кнопку «Сохранить» до клика).
     fireEvent.change(roles, { target: { value: 'judge, defense, expert' } });
+    fireEvent.blur(roles);
     fireEvent.change(categories, { target: { value: 'Закладка, Реплика' } });
+    fireEvent.blur(categories);
 
     fireEvent.click(screen.getByText('Сохранить'));
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
     const payload = saved.mock.calls[0][0].settings;
     expect(payload.audio.roles).toEqual(['judge', 'defense', 'expert']);
     expect(payload.markers.categories).toEqual(['Закладка', 'Реплика']);
+  });
+
+  it('при многоканальном режиме выбор устройства ввода отключён с подсказкой (R-008)', async () => {
+    setInvoke('get_settings', () => {
+      const s = settingsFixture();
+      s.audio.multichannel.enabled = true;
+      s.audio.tracks = [
+        { device: null, channel_index: 0, role: 'judge', label: 'Судья' },
+        { device: null, channel_index: 1, role: 'defense', label: 'Защита' },
+      ];
+      return s;
+    });
+    renderSettings();
+
+    // Единый выбор устройства отключён: источник задаёт карта дорожек (админ).
+    const device = await screen.findByLabelText('Устройство ввода');
+    expect(device).toBeDisabled();
+    // И оператору показана поясняющая подсказка.
+    expect(
+      screen.getByText(/устройства дорожек[\s\S]*настраиваются в «Администрировании»/i),
+    ).toBeInTheDocument();
+  });
+
+  it('без многоканала выбор устройства ввода активен', async () => {
+    setInvoke('get_settings', () => settingsFixture());
+    renderSettings();
+    const device = await screen.findByLabelText('Устройство ввода');
+    expect(device).not.toBeDisabled();
   });
 
   it('админ-параметры на экране оператора не показываются', async () => {

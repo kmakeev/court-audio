@@ -1,5 +1,6 @@
 import type { InputHTMLAttributes, ReactNode } from 'react';
 import { forwardRef } from 'react';
+import { CONTROL_HEIGHT } from './patterns';
 
 interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
   label: string;
@@ -26,6 +27,11 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
     <div
       style={{
         position: 'relative',
+        // Высоту из общего токена контролов держит бордюрная обёртка (а не input),
+        // чтобы её собственная рамка входила в высоту (box-sizing: border-box) и
+        // `Field` совпадал по высоте с `Select` в одном ряду (R-012). Иначе рамка
+        // обёртки добавляла бы ~2 px поверх высоты input'а.
+        height: CONTROL_HEIGHT,
         background: 'var(--paper-elev)',
         border: error ? '1px solid var(--accent)' : '1px solid var(--hairline)',
         transition: 'border-color 120ms ease',
@@ -37,9 +43,10 @@ export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
         {...rest}
         style={{
           width: '100%',
+          height: '100%',
           border: 0,
           background: 'transparent',
-          padding: trailing ? '12px 44px 12px 14px' : '12px 14px',
+          padding: trailing ? '0 44px 0 14px' : '0 14px',
           fontFamily: 'var(--sans)',
           fontSize: 14,
           color: 'var(--ink)',

@@ -172,8 +172,16 @@ export function RecordScreen() {
         setDevices(devs);
         setSettings(s);
         setRecoverable(rec);
-        const preferred =
-          s.audio.device ?? devs.find((d) => d.is_default)?.name ?? devs[0]?.name ?? '';
+        // Если сохранённое устройство сейчас присутствует — берём его; иначе
+        // (перенос конфига между машинами/ОС, R-005) не показываем «фантомный»
+        // выбор, а мягко откатываемся на системное/первое доступное. О
+        // несовпадении оператора предупреждает баннер ниже (`selectedDeviceMissing`).
+        const savedPresent = s.audio.device
+          ? devs.some((d) => d.name === s.audio.device)
+          : false;
+        const preferred = savedPresent
+          ? (s.audio.device as string)
+          : devs.find((d) => d.is_default)?.name ?? devs[0]?.name ?? '';
         setDeviceName(preferred);
         if (status.state === 'recording' || status.state === 'paused') {
           setState(status.state);
@@ -377,6 +385,21 @@ export function RecordScreen() {
   }, [state, confirm, onStart, onResume]);
 
   const isActive = state === 'recording' || state === 'paused';
+  // Сохранённое устройство не совпадает ни с одним присутствующим (перенос
+  // конфига между машинами/ОС, R-005): захват «молча» деградировал бы в тишину —
+  // предупреждаем оператора явно. Пустой список устройств — отдельный кейс
+  // (плейсхолдер «Устройства не найдены»), здесь не дублируем.
+  const configuredDevice = settings?.audio.device ?? null;
+  // Многоканал активен (то же условие, что в ядре — start_capture): источник
+  // каждой дорожки задаёт карта дорожек в «Администрировании», единый выбор
+  // устройства в захвате не участвует. Поле отключаем, чтобы не путать (R-008).
+  const multichannelActive =
+    !!settings && settings.audio.multichannel.enabled && settings.audio.tracks.length > 0;
+  const selectedDeviceMissing =
+    !multichannelActive &&
+    !!configuredDevice &&
+    devices.length > 0 &&
+    !devices.some((d) => d.name === configuredDevice);
   const quality = settings
     ? `${formatHz(settings.audio.sample_rate_hz)} · ${settings.audio.bit_depth} бит · ${formatChannels(settings.audio.channels)}`
     : '—';
@@ -504,6 +527,17 @@ export function RecordScreen() {
 
       <Card>
         <BlockHead numeral="A" title="Источник звука" />
+        {selectedDeviceMissing && (
+          <div style={{ marginTop: 12 }}>
+            <CriticalNotice
+              variant="warning"
+              title={`Выбранный микрофон «${configuredDevice}» не найден`}
+              description="Устройство из настроек сейчас недоступно (частая причина — перенос конфигурации между машинами или ОС). Запись пойдёт с другого устройства, а уровень может отсутствовать. Выберите устройство ниже или в настройках."
+              actionLabel="Открыть настройки"
+              actionTo="/settings"
+            />
+          </div>
+        )}
         <div
           style={{
             display: 'grid',
@@ -516,15 +550,36 @@ export function RecordScreen() {
             <span style={fieldLabelStyle}>Устройство ввода</span>
             <Select
               ariaLabel="Устройство ввода"
-              value={deviceName}
+              value={multichannelActive ? '' : deviceName}
               onChange={setDeviceName}
-              disabled={isActive}
+              disabled={isActive || multichannelActive}
               options={devices.map((d) => ({
                 value: d.name,
                 label: d.is_default ? `${d.name} (по умолчанию)` : d.name,
               }))}
-              placeholder={devices.length ? '— выберите устройство —' : 'Устройства не найдены'}
+              placeholder={
+                multichannelActive
+                  ? 'Многоканальный режим — устройства дорожек в «Администрировании»'
+                  : devices.length
+                    ? '— выберите устройство —'
+                    : 'Устройства не найдены'
+              }
             />
+            {multichannelActive && (
+              <span
+                style={{
+                  display: 'block',
+                  marginTop: 6,
+                  fontSize: 12,
+                  color: 'var(--muted)',
+                  lineHeight: 1.4,
+                }}
+              >
+                Включена многоканальная запись: источник каждой дорожки задаёт карта
+                дорожек в «Администрировании». Единый выбор устройства здесь не
+                используется — уровни всех дорожек показаны ниже.
+              </span>
+            )}
           </label>
           <div>
             <span style={fieldLabelStyle}>Качество записи</span>
@@ -835,7 +890,13 @@ function LiveAnnotations({
         <span style={fieldLabelStyle}>Отметить, кто говорит</span>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {suggestedRole && activeTrackId != null && (
-            <Button variant="primary" onClick={() => run(startRoleSpan(null, activeTrackId))}>
+            // Акцент (primary) сохраняем, но высоту ряда приводим к кнопкам ролей
+            // (secondary, компактный размер) — иначе подсказка выше соседей (R-009).
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => run(startRoleSpan(null, activeTrackId))}
+            >
               ● Активная дорожка: {suggestedRole}
             </Button>
           )}

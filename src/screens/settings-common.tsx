@@ -1,9 +1,10 @@
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   BlockHead,
   Button,
   Card,
   Checkbox,
+  CONTROL_HEIGHT,
   Field,
   fieldCaptionStyle,
   Icon,
@@ -97,6 +98,65 @@ export function parseNumberList(raw: string): number[] {
   return splitList(raw)
     .map((r) => Number(r))
     .filter((n) => Number.isFinite(n));
+}
+
+/**
+ * Поле-список «через запятую» (категории закладок, роли говорящих, скорости
+ * плеера). Правит **сырой текст** в локальном буфере и парсит его в массив
+ * только при потере фокуса. Раньше контролируемый `value = array.join(', ')`
+ * пересобирался на каждый keystroke: каретка прыгала в конец, запятую в конце
+ * и пробел в середине «не набрать» (`filter`/`trim` их отбрасывали) — R-007.
+ * Единый паттерн для всех полей «через запятую».
+ */
+export function ListField<T extends string | number>({
+  label,
+  placeholder,
+  value,
+  parse,
+  onCommit,
+  error,
+  disabled,
+  tip,
+}: {
+  label: string;
+  placeholder?: string;
+  value: T[];
+  parse: (raw: string) => T[];
+  onCommit: (parsed: T[]) => void;
+  error?: string;
+  disabled?: boolean;
+  tip?: ReactNode;
+}) {
+  const joined = value.join(', ');
+  // Буфер редактирования — то, что реально видит и правит оператор; отделён от
+  // разобранного массива, поэтому набор не реформатируется на каждый ввод.
+  const [raw, setRaw] = useState(joined);
+  const focused = useRef(false);
+  // Ресинхронизация буфера с внешним значением (первичная загрузка/сброс формы),
+  // но не пока поле в фокусе — иначе затёрли бы ввод. После blur буфер приходит
+  // к каноничному виду `join(', ')`.
+  useEffect(() => {
+    if (!focused.current) setRaw(joined);
+  }, [joined]);
+
+  return (
+    <Field
+      label={label}
+      placeholder={placeholder}
+      value={raw}
+      error={error}
+      disabled={disabled}
+      tip={tip}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onChange={(e) => setRaw(e.target.value)}
+      onBlur={() => {
+        focused.current = false;
+        onCommit(parse(raw));
+      }}
+    />
+  );
 }
 
 // ── Админ-секции реестра ──────────────────────────────────────────────────────
@@ -795,7 +855,6 @@ function MultichannelCard({
   );
 }
 
-const CONTROL_HEIGHT = 44;
 const selectTriggerStyle: CSSProperties = {
   minHeight: CONTROL_HEIGHT,
   padding: '11px 36px 11px 12px',

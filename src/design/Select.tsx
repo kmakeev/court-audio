@@ -21,6 +21,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { CONTROL_HEIGHT } from './patterns';
 
 export interface SelectOption {
   value: string;
@@ -182,7 +183,11 @@ export function Select({
     textAlign: 'left',
     position: 'relative',
     outline: 'none',
-    minHeight: 38,
+    // Общий токен высоты контролов: `Select` совпадает по высоте с `Field`
+    // в одном ряду фильтров/формы (R-012).
+    minHeight: CONTROL_HEIGHT,
+    display: 'flex',
+    alignItems: 'center',
     ...triggerStyle,
   };
 
@@ -205,7 +210,7 @@ export function Select({
         onKeyDown={onKeyDown}
         style={triggerCss}
       >
-        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {current ? current.label : (placeholder || ' ')}
         </span>
         <span

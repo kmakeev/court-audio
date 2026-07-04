@@ -1,13 +1,28 @@
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
+import { CONTROL_HEIGHT, CONTROL_HEIGHT_COMPACT } from './patterns';
 
 type Variant = 'primary' | 'secondary' | 'mini' | 'link';
 
+/**
+ * Размер ряда: подгоняет высоту/кегль под соседние кнопки **не меняя вариант**
+ * (акцент/цвет сохраняются). Нужен, когда в одном ряду соседствуют `primary`
+ * (44) и `secondary` (38) — без него ряд «прыгает» по высоте (R-009). Значения —
+ * те же размерные токены контролов (`CONTROL_HEIGHT`/`CONTROL_HEIGHT_COMPACT`).
+ */
+type Size = 'md' | 'sm';
+
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
+  size?: Size;
   loading?: boolean;
   leftIcon?: ReactNode;
   rightIcon?: ReactNode;
 }
+
+const sizeStyles: Record<Size, CSSProperties> = {
+  md: { height: CONTROL_HEIGHT, fontSize: 14 },
+  sm: { height: CONTROL_HEIGHT_COMPACT, fontSize: 13 },
+};
 
 const baseStyles: Record<Variant, CSSProperties> = {
   primary: {
@@ -54,6 +69,7 @@ const baseStyles: Record<Variant, CSSProperties> = {
 
 export function Button({
   variant = 'primary',
+  size,
   loading = false,
   leftIcon,
   rightIcon,
@@ -80,6 +96,9 @@ export function Button({
         appearance: 'none',
         WebkitAppearance: 'none',
         ...baseStyles[variant],
+        // Размер ряда переопределяет высоту/кегль варианта (но не цвет), затем
+        // может быть уточнён точечным `style`.
+        ...(size ? sizeStyles[size] : null),
         ...style,
       }}
       {...rest}
