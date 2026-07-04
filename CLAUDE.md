@@ -108,7 +108,8 @@ court-audio/
   [`docs/backlog.md`](docs/backlog.md)): `13_1_ui_fixes.md` (R-005/007/009/012) ·
   `13_2_multichannel_monitor.md` (R-008) · `13_3_mirror_structure.md` (R-010) ·
   `13_4_export_player_stall.md` (R-011) · `13_5_gates_failsecure.md`
-  (R-003/R-004, безопасность).
+  (R-003/R-004, безопасность) · `13_6_offline_pin_and_overlay.md`
+  (B-001 автономный офлайн-старт — после согласования; R-006 Windows overlay).
 
 ## Принципы «бесперебойности» (нефункциональное ядро)
 
