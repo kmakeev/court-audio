@@ -266,7 +266,9 @@ Application** и учётку нотаризации — `APPLE_CERTIFICATE`,
 Идентичность станции берётся из `COURT_AUDIO_STATION_ID` (та же переменная, что и
 для выгрузки). Профиль не засеивается, если нет `COURT_AUDIO_OPERATOR_PIN`/
 `COURT_AUDIO_OPERATOR_ID`/`COURT_AUDIO_STATION_ID` или PIN короче
-`auth.operator.offline_pin.min_length`. Модель идентичности — [`auth.md`](auth.md).
+`auth.operator.offline_pin.min_length`. Модель идентичности — [`auth.md`](auth.md);
+пошаговый ввод изолированного зала в эксплуатацию (порядок засева, чек-лист
+проверки) — [`first_run_offline.md`](first_run_offline.md).
 
 **Ключ станции обязателен и валидируется на старте (R-004, этап 13.5).** Раньше
 отсутствие фразы деградировало **молча**: онлайн-вход «успешен», а зашифрованные
