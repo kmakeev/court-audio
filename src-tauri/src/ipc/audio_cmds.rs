@@ -159,6 +159,11 @@ pub fn start_capture(
     // сессии требует вошедшего оператора. Идущую запись это не касается.
     crate::ipc::auth_cmds::ensure_start_allowed(&app, &settings)?;
     let storage_root = resolve_storage_root(&app, &settings)?;
+    // Fail-secure гейт шифрования (R-013, этап 13.7): при включённом
+    // `storage.encrypt_at_rest` ключ станции обязателен ДО старта — никакого
+    // тихого plaintext-фолбэка (линия R-003/R-004). Self-test «Ключ станции»
+    // показывает тот же отказ заранее.
+    let segment_key = segment_encryption_key(&settings, &storage_root)?;
     let output_dir = session_dir(&storage_root);
     let started_at_unix_ms = now_unix_ms();
 
@@ -175,9 +180,17 @@ pub fn start_capture(
             &output_dir,
             started_at_unix_ms,
             &tracks,
+            segment_key,
         )?
     } else {
-        start_single(&app, &settings, &storage_root, &output_dir, started_at_unix_ms)?
+        start_single(
+            &app,
+            &settings,
+            &storage_root,
+            &output_dir,
+            started_at_unix_ms,
+            segment_key,
+        )?
     };
 
     *guard = Some(started.active);
@@ -200,6 +213,7 @@ fn start_single(
     storage_root: &std::path::Path,
     output_dir: &std::path::Path,
     started_at_unix_ms: u64,
+    segment_key: Option<[u8; 32]>,
 ) -> Result<Started, String> {
     let params = build_params(settings, output_dir.to_path_buf());
 
@@ -247,6 +261,7 @@ fn start_single(
         Arc::clone(&journal),
         warn_cb(app),
         settings.audio.device.clone(),
+        segment_key,
     );
 
     let session =
@@ -283,6 +298,7 @@ fn start_multichannel(
     output_dir: &std::path::Path,
     started_at_unix_ms: u64,
     tracks: &[ResolvedTrack],
+    segment_key: Option<[u8; 32]>,
 ) -> Result<Started, String> {
     // Идентичность (этап 10.3): оператор из сессии входа, станция — учётка станции.
     let operator_id = operator_identity(app);
@@ -345,7 +361,14 @@ fn start_multichannel(
         params.track_id = entry.track_id;
         params.target_channels = 1; // дорожка моно
 
-        let reliability = build_reliability(settings, storage_root, tj, warn_cb(app), entry.device.clone());
+        let reliability = build_reliability(
+            settings,
+            storage_root,
+            tj,
+            warn_cb(app),
+            entry.device.clone(),
+            segment_key,
+        );
         specs.push(TrackStartSpec {
             track_id: entry.track_id,
             params,
@@ -644,9 +667,10 @@ pub fn capture_status(state: State<'_, CaptureState>) -> Result<CaptureStatus, S
     }
 }
 
-/// Подсчитать записанные WAV-сегменты в каталоге сессии (`seg-NNNN-….wav`).
-/// Многоканал (этап 09): сегменты живут в подкаталогах дорожек — считаем и их
-/// (один уровень вложенности `track-*/`).
+/// Подсчитать записанные сегменты в каталоге сессии (`seg-NNNN-….wav` и — при
+/// шифровании at-rest, R-013 — `….wav.enc`). Многоканал (этап 09): сегменты
+/// живут в подкаталогах дорожек — считаем и их (один уровень вложенности
+/// `track-*/`).
 fn count_segments(dir: &std::path::Path) -> u32 {
     fn count_flat(dir: &std::path::Path) -> u32 {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -655,9 +679,9 @@ fn count_segments(dir: &std::path::Path) -> u32 {
         entries
             .flatten()
             .filter(|e| {
-                e.file_name()
-                    .to_str()
-                    .is_some_and(|n| n.starts_with("seg-") && n.ends_with(".wav"))
+                e.file_name().to_str().is_some_and(|n| {
+                    n.starts_with("seg-") && (n.ends_with(".wav") || n.ends_with(".wav.enc"))
+                })
             })
             .count() as u32
     }
@@ -688,11 +712,14 @@ pub fn scan_recoverable(app: AppHandle) -> Result<Vec<RecoverableSession>, Strin
         .collect())
 }
 
-/// Восстановить сессию «на месте»: починить последний сегмент и пометить
-/// сессию восстановленной (решение заказчика — дописываем ту же сессию).
+/// Восстановить сессию «на месте»: починить последний сегмент, дожурналить
+/// незажурналированный хвост, дофинализировать его в `.enc` при включённом
+/// шифровании (R-013) и пометить сессию восстановленной (решение заказчика —
+/// дописываем ту же сессию).
 #[tauri::command]
-pub fn recover_session(dir: String) -> Result<(), String> {
-    recovery::recover_in_place(&PathBuf::from(dir))
+pub fn recover_session(app: AppHandle, dir: String) -> Result<(), String> {
+    let key = recovery_encryption_key(&app)?;
+    recovery::recover_in_place(&PathBuf::from(dir), key.as_ref())
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -700,11 +727,20 @@ pub fn recover_session(dir: String) -> Result<(), String> {
 /// Закрыть незавершённую сессию как восстановленную, не продолжая запись:
 /// чиним последний сегмент (целостность данных) и помечаем `Recovered`+`Stopped`.
 #[tauri::command]
-pub fn discard_session(dir: String) -> Result<(), String> {
+pub fn discard_session(app: AppHandle, dir: String) -> Result<(), String> {
+    let key = recovery_encryption_key(&app)?;
     let dir = PathBuf::from(dir);
-    recovery::recover_in_place(&dir).map_err(|e| e.to_string())?;
+    recovery::recover_in_place(&dir, key.as_ref()).map_err(|e| e.to_string())?;
     let mut j = Journal::open(&dir).map_err(|e| e.to_string())?;
     j.append(&JournalRecord::Stopped).map_err(|e| e.to_string())
+}
+
+/// Ключ дофинализации хвостового сегмента для команд восстановления: та же
+/// fail-secure политика, что у старта записи (`segment_encryption_key`).
+fn recovery_encryption_key(app: &AppHandle) -> Result<Option<[u8; 32]>, String> {
+    let settings = load_settings(app)?;
+    let root = resolve_storage_root(app, &settings)?;
+    segment_encryption_key(&settings, &root)
 }
 
 fn emit_state(app: &AppHandle, state: &'static str) {
@@ -764,6 +800,7 @@ fn build_reliability(
     journal: Arc<Mutex<Journal>>,
     on_event: crate::audio::capture::ReliabilityCallback,
     device_name: Option<String>,
+    segment_key: Option<[u8; 32]>,
 ) -> ReliabilityConfig {
     let r = &settings.reliability;
     // Зеркало (этап 13.3): структура зеркала = структуре основного места, поэтому
@@ -799,7 +836,31 @@ fn build_reliability(
         auto_resume: r.device_reconnect.auto_resume,
         device_name,
         on_event: Some(on_event),
+        segment_key,
     }
+}
+
+/// Разрешить ключ шифрования сегментов по политике `storage.encrypt_at_rest`
+/// (R-013). Fail-secure: включённое шифрование без доступного ключа — громкая
+/// ошибка (старт записи/восстановление блокируются), не тихий plaintext.
+/// `pub` — чистая функция без Tauri, гейт проверяется интеграционным тестом
+/// (`tests/gates_failsecure.rs`), как `start_gate_decision`/`admin_change_denied`.
+pub fn segment_encryption_key(
+    settings: &Settings,
+    storage_root: &std::path::Path,
+) -> Result<Option<[u8; 32]>, String> {
+    if !settings.storage.encrypt_at_rest {
+        return Ok(None);
+    }
+    crate::store::crypto::resolve_station_key(settings.storage.key_source, storage_root)
+        .map(Some)
+        .map_err(|e| {
+            format!(
+                "шифрование записей включено (storage.encrypt_at_rest), но ключ станции недоступен: {e}. \
+                 Запись невозможна — задайте ключ станции при развёртывании (см. docs/packaging.md) \
+                 или отключите шифрование через администратора."
+            )
+        })
 }
 
 /// Каталог конкретной сессии: `<storage_root>/session-<unix_ms>`.

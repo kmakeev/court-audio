@@ -10,6 +10,7 @@
 use std::sync::Mutex;
 
 use court_audio_lib::ipc::admin_cmds::admin_change_denied;
+use court_audio_lib::ipc::audio_cmds::segment_encryption_key;
 use court_audio_lib::ipc::auth_cmds::start_gate_decision;
 use court_audio_lib::ipc::{parse_settings_failsecure, CONFIG_CORRUPT_MESSAGE};
 use court_audio_lib::settings::{KeySource, Settings};
@@ -89,6 +90,31 @@ fn station_key_mandatory_and_failure_not_swallowed() {
     assert!(!admin_pin::verify(root, KeySource::Passphrase, "0000").unwrap());
 
     std::env::remove_var(crypto::PASSPHRASE_ENV);
+}
+
+// ── R-013 (этап 13.7): fail-secure гейт шифрования сегментов ──────────────────
+
+#[test]
+fn encrypt_at_rest_without_key_blocks_recording_start() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let mut settings = Settings::default(); // storage.encrypt_at_rest = true
+
+    // Нет ключа станции: старт записи блокируется громкой ошибкой —
+    // никакого тихого plaintext-фолбэка.
+    std::env::remove_var(crypto::PASSPHRASE_ENV);
+    let err = segment_encryption_key(&settings, root).unwrap_err();
+    assert!(err.contains("ключ станции"), "диагностика понятна: {err}");
+
+    // С ключом — гейт открыт, ключ разрешён для writer-потока.
+    std::env::set_var(crypto::PASSPHRASE_ENV, "station-secret-13-7");
+    assert!(segment_encryption_key(&settings, root).unwrap().is_some());
+    std::env::remove_var(crypto::PASSPHRASE_ENV);
+
+    // Шифрование выключено: ключ не нужен, поведение прежнее (plaintext WAV).
+    settings.storage.encrypt_at_rest = false;
+    assert!(segment_encryption_key(&settings, root).unwrap().is_none());
 }
 
 fn sample_session() -> CachedSession {

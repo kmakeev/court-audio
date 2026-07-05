@@ -183,6 +183,7 @@ fn short_recording_journals_trailing_segment() {
         disk: None,
         max_session: None,
         on_event: None,
+        segment_key: None,
     };
     let stop = Arc::new(AtomicBool::new(true));
     let level_cb = Box::new(|_: LevelEvent| {});

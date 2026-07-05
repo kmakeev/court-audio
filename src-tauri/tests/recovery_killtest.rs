@@ -75,6 +75,7 @@ fn killtest_recovers_unfinished_session() {
         disk: None,
         max_session: None,
         on_event: None,
+        segment_key: None,
     };
 
     let stop = Arc::new(AtomicBool::new(true));
@@ -129,7 +130,7 @@ fn killtest_recovers_unfinished_session() {
     assert_eq!(unfinished.len(), 1);
     assert_eq!(unfinished[0].dir, session);
 
-    let outcome = recovery::recover_in_place(&session).unwrap();
+    let outcome = recovery::recover_in_place(&session, None).unwrap();
     assert!(matches!(outcome, Some(RepairOutcome::Repaired { .. })));
 
     // Все сегменты валидны; первые два — без потерь, третий потерял ≤ усечения.

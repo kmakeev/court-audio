@@ -25,7 +25,6 @@ use crate::ipc::{load_settings, resolve_storage_root, MANIFEST_FILE};
 use crate::player::timeline::Timeline;
 use crate::reliability::watchdog::now_unix_ms;
 use crate::store::case_binding::AdjudicationRef;
-use crate::store::crypto;
 use crate::store::manifest::{ManifestStore, SessionRecord, TrackRecord};
 use crate::store::reconcile;
 
@@ -122,7 +121,8 @@ pub fn export_session_info(app: AppHandle, dir: String) -> Result<ExportSessionI
     let settings = load_settings(&app)?;
     let root = resolve_storage_root(&app, &settings)?;
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir))
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir), key.as_ref())
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
 
@@ -175,7 +175,8 @@ pub fn export_build_package(
     let settings = load_settings(&app)?;
     let root = resolve_storage_root(&app, &settings)?;
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir))
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir), key.as_ref())
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
 
@@ -209,12 +210,6 @@ pub fn export_build_package(
 
     let track_records = store.resolve_tracks(&session_id).map_err(|e| e.to_string())?;
     let all_segments = store.get_segments(&session_id).map_err(|e| e.to_string())?;
-
-    let key = if settings.storage.encrypt_at_rest {
-        crypto::resolve_station_key(settings.storage.key_source, &root).ok()
-    } else {
-        None
-    };
 
     let sample_rate_hz = session.sample_rate_hz;
     let plan_track = |t: &TrackRecord| PlannedTrack {
@@ -339,7 +334,8 @@ pub fn export_burn_dvd(
     let settings = load_settings(&app)?;
     let root = resolve_storage_root(&app, &settings)?;
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir))
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir), key.as_ref())
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
 

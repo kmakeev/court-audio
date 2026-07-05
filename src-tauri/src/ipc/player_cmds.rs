@@ -34,7 +34,6 @@ use crate::player::source::{self, PlayerError};
 use crate::player::state::{PlayerEvent, PlayerMachine, PlayerState as MachineState};
 use crate::player::timeline::Timeline;
 use crate::reliability::watchdog::now_unix_ms;
-use crate::store::crypto;
 use crate::store::manifest::ManifestStore;
 use crate::store::reconcile;
 
@@ -254,7 +253,8 @@ pub fn player_open_session(
     let settings = load_settings(&app)?;
     let root = resolve_storage_root(&app, &settings)?;
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir))
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(&dir), key.as_ref())
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
 
@@ -292,12 +292,6 @@ pub fn player_open_session(
     if tracks.iter().all(|t| t.timeline.total_frames == 0) {
         return Err("сессия не содержит записанных сегментов".to_string());
     }
-
-    let key = if settings.storage.encrypt_at_rest {
-        crypto::resolve_station_key(settings.storage.key_source, &root).ok()
-    } else {
-        None
-    };
 
     let annotation_log = store.get_annotations(&session_id).map_err(|e| e.to_string())?;
     let snapshot = annotations::fold(&annotation_log);

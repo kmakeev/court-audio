@@ -87,6 +87,7 @@ fn record_track(storage_root: &Path, mirror_root: &Path, tdir: &Path, track_id: 
         disk: None,
         max_session: None,
         on_event: None,
+        segment_key: None,
     };
     let stop = Arc::new(AtomicBool::new(true));
     run_consumer(
@@ -183,7 +184,7 @@ fn mirror_reconstructs_sessions_and_tracks_independently() {
     // Реконсиляция ИЗ ЗЕРКАЛА (не из основного места) даёт консистентную сессию,
     // а пути манифеста указывают на файлы **зеркала** (самодостаточность).
     let store = ManifestStore::in_memory().unwrap();
-    reconcile_session(&store, &m1).unwrap();
+    reconcile_session(&store, &m1, None).unwrap();
 
     let sess = store.get_session("session-1").unwrap().unwrap();
     assert_eq!(sess.status, SessionStatus::Stopped);
@@ -227,6 +228,7 @@ fn mirror_failure_does_not_stop_recording() {
         disk: None,
         max_session: None,
         on_event: None,
+        segment_key: None,
     };
 
     let (producer, consumer) = ring::channel(FRAMES + 16);

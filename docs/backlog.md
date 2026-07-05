@@ -369,7 +369,7 @@
 
 ### R-013. Шифрование аудио-сегментов at-rest не подключено в боевой путь записи
 
-- **Статус:** ✅ принято (→ [`promts/13_7_flac_memory_and_segment_encryption.md`](../promts/13_7_flac_memory_and_segment_encryption.md), часть A) · **Дата:** 2026-07-05 · **Автор:** анализ ресурсоёмкости/кода
+- **Статус:** ✅ исправлено (этап 13.7, часть A — [`promts/13_7_flac_memory_and_segment_encryption.md`](../promts/13_7_flac_memory_and_segment_encryption.md)) · **Дата:** 2026-07-05 (найдено и исправлено) · **Автор:** анализ ресурсоёмкости/кода
 - **Наблюдение.** Документация (README, `configuration.md` →
   `storage.encrypt_at_rest`, `CLAUDE.md` «ПДн и безопасность») заявляет шифрование
   **записей** at-rest (AES-256-GCM на сегмент). Фактически функция
@@ -397,7 +397,7 @@
 
 ### R-014. FLAC-экспорт держит всю сессию в памяти (риск OOM на длинных записях)
 
-- **Статус:** ✅ принято (→ [`promts/13_7_flac_memory_and_segment_encryption.md`](../promts/13_7_flac_memory_and_segment_encryption.md), часть B) · **Дата:** 2026-07-05 · **Автор:** анализ ресурсоёмкости/кода
+- **Статус:** ✅ исправлено (этап 13.7, часть B — [`promts/13_7_flac_memory_and_segment_encryption.md`](../promts/13_7_flac_memory_and_segment_encryption.md); замер: ~10 МБ RSS на часе синтетики) · **Дата:** 2026-07-05 (найдено и исправлено) · **Автор:** анализ ресурсоёмкости/кода
 - **Наблюдение.** `export/flac.rs::encode_wav_to_flac` читает **весь** склеенный
   WAV в `Vec<i32>` (4 байта на семпл) и сериализует FLAC-поток тоже в память
   (`ByteSink`) перед записью на диск. Трёхчасовая моно-сессия 44.1 кГц ≈ 476 млн

@@ -28,7 +28,7 @@ const NONCE_LEN: usize = 12;
 /// Длина соли KDF — 128 бит (крипто-константа Argon2id, не настройка).
 const SALT_LEN: usize = 16;
 /// Размер ключа станции — 256 бит (AES-256).
-const KEY_LEN: usize = 32;
+pub const KEY_LEN: usize = 32;
 /// Имя файла персистентной соли в корне хранилища.
 pub const SALT_FILE_NAME: &str = "key.salt";
 /// Env-переменная с парольной фразой станции (секрет, не в settings.json).

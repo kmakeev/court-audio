@@ -125,6 +125,21 @@ pub fn save_settings(
     )
 }
 
+/// Ключ станции для чтения/реконсиляции `.enc`-сегментов (R-013, этап 13.7):
+/// `Some` при включённом `storage.encrypt_at_rest` и доступном ключе, иначе
+/// `None` (plaintext-сессии читаются без ключа). Недоступность ключа здесь не
+/// ошибка — громкий fail-secure отказ даёт гейт старта записи и self-test;
+/// команды чтения на plaintext-записях продолжают работать.
+pub(crate) fn station_key_for_read(
+    settings: &Settings,
+    storage_root: &std::path::Path,
+) -> Option<[u8; 32]> {
+    if !settings.storage.encrypt_at_rest {
+        return None;
+    }
+    crate::store::crypto::resolve_station_key(settings.storage.key_source, storage_root).ok()
+}
+
 /// Корень локального хранилища: `storage.root_path` или `<data-dir>/recordings`.
 /// Общий помощник для команд захвата ([`audio_cmds`]) и запросов
 /// ([`query_cmds`]) — единый источник пути без дублирования.

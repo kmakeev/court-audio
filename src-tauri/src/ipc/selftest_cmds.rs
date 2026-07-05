@@ -200,8 +200,9 @@ pub fn build_report(inputs: &SelfTestInputs) -> SelfTestReport {
     });
 
     // 5. Ключ станции доступен (R-004, этап 13.5). Без ключа зашифровать ПДн
-    //    невозможно: при `encrypt_at_rest` запись сегментов сорвётся → Fail
-    //    (блокирует старт); иначе офлайн-вход/админ-PIN недоступны → Warn.
+    //    невозможно: при `encrypt_at_rest` гейт старта записи закрыт (R-013,
+    //    этап 13.7 — fail-secure, не тихий plaintext) → Fail (блокирует
+    //    старт); иначе офлайн-вход/админ-PIN недоступны → Warn.
     checks.push(if inputs.station_key_available {
         SelfTestCheck {
             id: "station_key",
@@ -215,8 +216,8 @@ pub fn build_report(inputs: &SelfTestInputs) -> SelfTestReport {
             id: "station_key",
             label: "Ключ станции",
             status: CheckStatus::Fail,
-            detail: "Ключ станции не задан, а шифрование ПДн включено — запись не сохранится. \
-                     Задайте ключ станции при развёртывании."
+            detail: "Ключ станции не задан, а шифрование записей включено — старт записи \
+                     заблокирован. Задайте ключ станции при развёртывании."
                 .to_string(),
             fix: Some("open_settings"),
         }

@@ -78,6 +78,7 @@ fn disk_critical_triggers_clean_stop_without_data_loss() {
         }),
         max_session: None,
         on_event: Some(on_event),
+        segment_key: None,
     };
 
     // stop=false: остановка должна прийти именно от критического порога диска.
@@ -135,6 +136,7 @@ fn segments_are_mirrored_to_second_storage() {
         disk: None,
         max_session: None,
         on_event: None,
+        segment_key: None,
     };
 
     let stop = Arc::new(AtomicBool::new(true));

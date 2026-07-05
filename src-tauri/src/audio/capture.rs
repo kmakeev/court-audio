@@ -36,6 +36,7 @@ use serde::Serialize;
 
 use super::{convert, ring, AudioError};
 use crate::recorder::journal::{Journal, JournalRecord};
+use crate::store::crypto;
 use crate::recorder::segment_writer::{SegmentConfig, SegmentInfo, SegmentWriter};
 use crate::reliability::device_monitor::{DeviceEvent, DeviceMonitor};
 use crate::reliability::disk_monitor::{self, DiskStatus, DiskThresholds};
@@ -156,6 +157,12 @@ pub struct ReliabilityConfig {
     pub device_name: Option<String>,
     /// Колбэк событий надёжности (UI + журнал на стороне IPC).
     pub on_event: Option<ReliabilityCallback>,
+    /// Ключ станции для шифрования сегментов at-rest (R-013, этап 13.7):
+    /// `Some` при `storage.encrypt_at_rest` — закрытый сегмент финализируется
+    /// ([`crypto::finalize_segment`]) на writer-потоке; `None` — plaintext WAV
+    /// (поведение до этапа). Доступность ключа гарантирует fail-secure гейт
+    /// старта записи в IPC — сюда ключ приходит уже разрешённым.
+    pub segment_key: Option<[u8; crypto::KEY_LEN]>,
 }
 
 impl ReliabilityConfig {
@@ -170,6 +177,7 @@ impl ReliabilityConfig {
             auto_resume: false,
             device_name: None,
             on_event: None,
+            segment_key: None,
         }
     }
 }
@@ -181,6 +189,8 @@ pub struct ConsumerReliability {
     pub disk: Option<DiskWatch>,
     pub max_session: Option<Duration>,
     pub on_event: Option<ReliabilityCallback>,
+    /// Ключ шифрования сегментов at-rest (R-013): см. [`ReliabilityConfig::segment_key`].
+    pub segment_key: Option<[u8; crypto::KEY_LEN]>,
 }
 
 impl ConsumerReliability {
@@ -192,6 +202,7 @@ impl ConsumerReliability {
             disk: None,
             max_session: None,
             on_event: None,
+            segment_key: None,
         }
     }
 
@@ -337,6 +348,7 @@ impl CaptureSession {
             disk: reliability.disk.clone(),
             max_session: reliability.max_session,
             on_event: reliability.on_event.clone(),
+            segment_key: reliability.segment_key,
         };
 
         let writer_stop = Arc::new(AtomicBool::new(false));
@@ -989,6 +1001,9 @@ pub fn run_consumer(
     // Сколько сегментов уже журналировано (через drain_completed). Хвостовой
     // сегмент, закрываемый finalize() на стопе, журналируем отдельно ниже.
     let mut journaled = 0usize;
+    // Фактические stored-пути уже журналированных сегментов (при шифровании —
+    // `.enc`): нужны, чтобы вернуть вызывающему актуальные пути после стопа.
+    let mut stored_paths: Vec<PathBuf> = Vec::new();
 
     'run: loop {
         let n = consumer.pop_slice(&mut scratch);
@@ -1007,25 +1022,27 @@ pub fn run_consumer(
             }
             writer.maybe_flush()?;
 
-            // По факту закрытия сегмента: журнал + зеркало + контроль диска.
+            // По факту закрытия сегмента: финализация (R-013: хеш → шифрование
+            // → `.enc`) + журнал + зеркало + контроль диска.
             let mut closed_any = false;
             for seg in writer.drain_completed() {
+                let stored = finalize_closed_segment(&seg, &rel);
                 rel.journal(&JournalRecord::SegmentCompleted {
                     index: seg.index,
-                    path: segment_journal_name(&seg.path),
+                    path: segment_journal_name(&stored),
                     frames: seg.frames,
                     started_at_unix_ms: seg.started_at_unix_ms as u64,
                 });
                 journaled += 1;
                 closed_any = true;
+                // Зеркало — ПОСЛЕ финализации: на второй носитель едет тот же
+                // `.enc`-блоб, plaintext не живёт на зеркале дольше основного места.
                 if let Some(mirror) = &rel.mirror {
-                    if let Err(e) = mirror.mirror_segment(&seg) {
-                        eprintln!(
-                            "[reliability] зеркалирование {:?} не удалось: {e}",
-                            seg.path
-                        );
+                    if let Err(e) = mirror.mirror_file(&stored) {
+                        eprintln!("[reliability] зеркалирование {stored:?} не удалось: {e}");
                     }
                 }
+                stored_paths.push(stored);
                 // Контроль диска с шагом «сегмент» (config-derived cadence).
                 if check_disk(&rel, &mut last_disk_status) == DiskStatus::Critical {
                     break 'run; // защитный стоп: ниже finalize гарантирует флаш
@@ -1066,27 +1083,57 @@ pub fn run_consumer(
     // журналируем и зеркалируем — иначе короткая запись (короче segment_seconds)
     // остаётся без segment_completed, не попадает в манифест и не выгружается
     // (потеря данных, нарушение «не терять более нескольких секунд»).
-    let segments = writer.finalize()?;
+    let mut segments = writer.finalize()?;
     for seg in segments.iter().skip(journaled) {
+        let stored = finalize_closed_segment(seg, &rel);
         rel.journal(&JournalRecord::SegmentCompleted {
             index: seg.index,
-            path: segment_journal_name(&seg.path),
+            path: segment_journal_name(&stored),
             frames: seg.frames,
             started_at_unix_ms: seg.started_at_unix_ms as u64,
         });
         if let Some(mirror) = &rel.mirror {
-            if let Err(e) = mirror.mirror_segment(seg) {
-                eprintln!(
-                    "[reliability] зеркалирование {:?} не удалось: {e}",
-                    seg.path
-                );
+            if let Err(e) = mirror.mirror_file(&stored) {
+                eprintln!("[reliability] зеркалирование {stored:?} не удалось: {e}");
             }
         }
+        stored_paths.push(stored);
     }
     // Финальная досылка журнала дорожки на зеркало (хвостовой сегмент/защитный
     // стоп): на зеркале лежит полный состав сегментов дорожки для реконсиляции.
     rel.mirror_journal();
+    // Возвращаем фактические stored-пути (при шифровании — `.enc`), чтобы
+    // UI-сводка и манифест не ссылались на уже удалённые открытые WAV.
+    for (seg, stored) in segments.iter_mut().zip(stored_paths) {
+        seg.path = stored;
+    }
     Ok(segments)
+}
+
+/// Финализировать закрытый сегмент по политике шифрования (R-013, этап 13.7):
+/// при заданном ключе — SHA-256 по открытому WAV → AES-256-GCM в `<seg>.wav.enc`
+/// → удаление открытой копии; без ключа — сегмент остаётся plaintext WAV
+/// (поведение `storage.encrypt_at_rest = false`). Возвращает фактический
+/// stored-путь.
+///
+/// Сбой финализации **не роняет запись** (принцип «бесперебойности»): сегмент
+/// остаётся открытым WAV на диске, ошибка логируется громко. Отсутствие ключа
+/// при включённом шифровании исключено раньше — fail-secure гейтом старта
+/// записи (IPC).
+fn finalize_closed_segment(seg: &SegmentInfo, rel: &ConsumerReliability) -> PathBuf {
+    let Some(key) = &rel.segment_key else {
+        return seg.path.clone();
+    };
+    match crypto::finalize_segment(&seg.path, Some(key), true) {
+        Ok(fin) => fin.stored_path,
+        Err(e) => {
+            eprintln!(
+                "[store] ВНИМАНИЕ: шифрование сегмента {:?} не удалось ({e}) — сегмент оставлен открытым WAV",
+                seg.path
+            );
+            seg.path.clone()
+        }
+    }
 }
 
 /// Замерить свободное место и при ухудшении статуса — оповестить/журналировать.

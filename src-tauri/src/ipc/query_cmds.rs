@@ -30,20 +30,21 @@ fn open_and_reconcile(app: &AppHandle) -> Result<ManifestStore, String> {
     let settings = load_settings(app)?;
     let root = resolve_storage_root(app, &settings)?;
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    reconcile_all(&store, &root);
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    reconcile_all(&store, &root, key.as_ref());
     Ok(store)
 }
 
 /// Реконсилировать все подкаталоги корня хранилища. Ошибки отдельных сессий не
 /// валят запрос целиком — пропускаем сбойный каталог (UI покажет остальное).
-fn reconcile_all(store: &ManifestStore, root: &Path) {
+fn reconcile_all(store: &ManifestStore, root: &Path, key: Option<&[u8; 32]>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return; // корень ещё не создан — сессий нет
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            let _ = reconcile::reconcile_session(store, &path);
+            let _ = reconcile::reconcile_session(store, &path, key);
         }
     }
 }
@@ -164,7 +165,8 @@ pub fn diagnostics(app: AppHandle) -> Result<DiagnosticsInfo, String> {
     };
 
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    reconcile_all(&store, &root);
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    reconcile_all(&store, &root, key.as_ref());
     let last_session = store
         .list_sessions()
         .map_err(|e| e.to_string())?
@@ -246,7 +248,8 @@ fn open_and_reconcile_one(
     let settings = load_settings(app)?;
     let root = resolve_storage_root(app, &settings)?;
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(dir))
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    let session_id = reconcile::reconcile_session(&store, &PathBuf::from(dir), key.as_ref())
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
     Ok((store, session_id))
@@ -374,7 +377,7 @@ mod tests {
         build_session(tmp.path(), "session-2", false);
 
         let store = ManifestStore::open(&tmp.path().join(MANIFEST_FILE)).unwrap();
-        reconcile_all(&store, tmp.path());
+        reconcile_all(&store, tmp.path(), None);
 
         let sessions = store.list_sessions().unwrap();
         assert_eq!(sessions.len(), 2);
@@ -390,7 +393,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("nope");
         let store = ManifestStore::in_memory().unwrap();
-        reconcile_all(&store, &missing); // не паникует
+        reconcile_all(&store, &missing, None); // не паникует
         assert!(store.list_sessions().unwrap().is_empty());
     }
 
@@ -411,7 +414,7 @@ mod tests {
         let dir = tmp.path().join("session-42");
 
         let store = ManifestStore::open(&tmp.path().join(MANIFEST_FILE)).unwrap();
-        let session_id = reconcile::reconcile_session(&store, &dir).unwrap().unwrap();
+        let session_id = reconcile::reconcile_session(&store, &dir, None).unwrap().unwrap();
 
         let record = store.get_session(&session_id).unwrap().unwrap();
         assert_eq!(record.status, crate::store::manifest::SessionStatus::Stopped);

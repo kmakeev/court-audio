@@ -25,17 +25,23 @@ use crate::sync::client::HttpTransport;
 use crate::sync::scheduler::{process_queue_once, TickContext};
 use crate::sync::queue;
 
-/// Открыть манифест станции по настройкам приложения.
-fn open_store(app: &AppHandle) -> Result<(ManifestStore, PathBuf), String> {
+/// Открыть манифест станции по настройкам приложения. Третий элемент — ключ
+/// станции для чтения `.enc`-сегментов при реконсиляции (R-013).
+fn open_store(app: &AppHandle) -> Result<(ManifestStore, PathBuf, Option<[u8; 32]>), String> {
     let settings = load_settings(app)?;
     let root = resolve_storage_root(app, &settings)?;
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
-    Ok((store, root))
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    Ok((store, root, key))
 }
 
 /// Реконсилировать сессию из каталога и вернуть её `id` (как `bind_session_case`).
-fn session_id_for_dir(store: &ManifestStore, dir: &str) -> Result<String, String> {
-    reconcile::reconcile_session(store, &PathBuf::from(dir))
+fn session_id_for_dir(
+    store: &ManifestStore,
+    dir: &str,
+    key: Option<&[u8; 32]>,
+) -> Result<String, String> {
+    reconcile::reconcile_session(store, &PathBuf::from(dir), key)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))
 }
@@ -44,8 +50,8 @@ fn session_id_for_dir(store: &ManifestStore, dir: &str) -> Result<String, String
 /// ошибки неотправленных частей и снять паузу — фоновый планировщик подхватит.
 #[tauri::command]
 pub fn retry_upload(app: AppHandle, dir: String) -> Result<(), String> {
-    let (store, _) = open_store(&app)?;
-    let id = session_id_for_dir(&store, &dir)?;
+    let (store, _, key) = open_store(&app)?;
+    let id = session_id_for_dir(&store, &dir, key.as_ref())?;
     let session = store
         .get_session(&id)
         .map_err(|e| e.to_string())?
@@ -67,8 +73,8 @@ pub fn retry_upload(app: AppHandle, dir: String) -> Result<(), String> {
 /// Поставить выгрузку записи на паузу (планировщик её пропускает).
 #[tauri::command]
 pub fn pause_upload(app: AppHandle, dir: String) -> Result<(), String> {
-    let (store, _) = open_store(&app)?;
-    let id = session_id_for_dir(&store, &dir)?;
+    let (store, _, key) = open_store(&app)?;
+    let id = session_id_for_dir(&store, &dir, key.as_ref())?;
     store
         .set_upload_paused(&id, true)
         .map_err(|e| e.to_string())
@@ -77,8 +83,8 @@ pub fn pause_upload(app: AppHandle, dir: String) -> Result<(), String> {
 /// Снять паузу выгрузки записи.
 #[tauri::command]
 pub fn resume_upload(app: AppHandle, dir: String) -> Result<(), String> {
-    let (store, _) = open_store(&app)?;
-    let id = session_id_for_dir(&store, &dir)?;
+    let (store, _, key) = open_store(&app)?;
+    let id = session_id_for_dir(&store, &dir, key.as_ref())?;
     store
         .set_upload_paused(&id, false)
         .map_err(|e| e.to_string())

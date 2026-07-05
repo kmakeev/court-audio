@@ -15,6 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use super::journal::{self, JournalRecord, SessionMeta};
+use crate::store::crypto;
 
 /// Незавершённая сессия, найденная при сканировании.
 #[derive(Debug, Clone)]
@@ -77,15 +78,16 @@ pub fn mark_recovered(dir: &Path) -> std::io::Result<()> {
     j.append(&JournalRecord::Recovered)
 }
 
-/// Найти WAV-сегменты сессии (`seg-*.wav`), отсортированные по имени (= по
-/// возрастанию индекса, т.к. индекс дополнен нулями).
+/// Найти файлы сегментов сессии (`seg-*.wav` и — при шифровании at-rest,
+/// R-013 — `seg-*.wav.enc`), отсортированные по имени (= по возрастанию
+/// индекса, т.к. индекс дополнен нулями).
 pub fn segment_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("seg-") && n.ends_with(".wav"))
+                .map(|n| n.starts_with("seg-") && (n.ends_with(".wav") || n.ends_with(".wav.enc")))
                 .unwrap_or(false)
         })
         .collect();
@@ -94,17 +96,136 @@ pub fn segment_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 }
 
 /// Восстановить сессию «на месте»: починить последний (возможно усечённый)
-/// сегмент и пометить сессию `Recovered`. Только последний сегмент мог быть
-/// оборван — предыдущие финализированы и сфсинканы. Возвращает итог починки
-/// последнего сегмента (или `None`, если сегментов нет).
-pub fn recover_in_place(dir: &Path) -> std::io::Result<Option<RepairOutcome>> {
+/// сегмент, **дожурналить** сегменты, не успевшие получить `SegmentCompleted`
+/// (при крахе это хвостовой сегмент — его запись в журнал делается только при
+/// закрытии), дофинализировать их в `.enc` при включённом шифровании
+/// (`encryption_key = Some`, R-013) и пометить сессию `Recovered`. Возвращает
+/// итог починки последнего сегмента (или `None`, если сегментов нет).
+///
+/// `encryption_key`: `Some` — политика `storage.encrypt_at_rest` активна, ключ
+/// станции разрешён (fail-secure гейт — на вызывающей стороне); `None` —
+/// plaintext-режим, файлы остаются WAV.
+pub fn recover_in_place(
+    dir: &Path,
+    encryption_key: Option<&[u8; crypto::KEY_LEN]>,
+) -> std::io::Result<Option<RepairOutcome>> {
     let segments = segment_files(dir)?;
+    // Чинится только незашифрованный хвост: `.enc`-сегменты финализированы
+    // целиком (шифрование идёт после закрытия файла) и в починке не нуждаются.
     let outcome = match segments.last() {
-        Some(last) => Some(repair_last_segment(last)?),
-        None => None,
+        Some(last) if !is_encrypted_segment(last) => Some(repair_last_segment(last)?),
+        _ => None,
     };
+    journal_stray_segments(dir, &segments, encryption_key)?;
     mark_recovered(dir)?;
     Ok(outcome)
+}
+
+/// Сегмент хранится шифрованным (`….wav.enc`)?
+fn is_encrypted_segment(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e == crypto::ENCRYPTED_EXT)
+        .unwrap_or(false)
+}
+
+/// Дожурналить сегменты, лежащие на диске без записи `SegmentCompleted`
+/// (закрытие сегмента журналируется по факту финализации, которой при крахе не
+/// происходит), и — при включённом шифровании — дофинализировать открытые WAV в
+/// `.enc`. Без этого хвостовой сегмент не попадал бы в манифест/хеш-цепочку/
+/// выгрузку (потеря последних ≤ `recorder.segment_seconds` записи).
+fn journal_stray_segments(
+    dir: &Path,
+    segments: &[PathBuf],
+    encryption_key: Option<&[u8; crypto::KEY_LEN]>,
+) -> std::io::Result<()> {
+    let journal_path = dir.join(journal::JOURNAL_FILE_NAME);
+    if !journal_path.exists() {
+        return Ok(());
+    }
+    let state = journal::replay(&journal_path)?;
+    let known: std::collections::HashSet<String> = state
+        .completed_segments
+        .iter()
+        .map(|s| canonical_segment_name(&s.path))
+        .collect();
+
+    let mut j = journal::Journal::open(dir)?;
+    for path in segments {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if known.contains(&canonical_segment_name(&name)) {
+            continue;
+        }
+        // Метаданные сегмента — из имени файла (`seg-NNNN-<unix_ms>.wav[.enc]`)
+        // и фактического содержимого (кадры — из WAV-заголовка).
+        let Some((index, started_at_unix_ms)) = parse_segment_name(&name) else {
+            continue;
+        };
+        let Some(frames) = segment_frames(path, encryption_key) else {
+            continue; // нечитаемый файл — не журналируем битую запись
+        };
+        // Дофинализация (R-013): хеш и шифрование делает `finalize_segment`;
+        // хеш здесь не персистится — реконсиляция пересчитает его по
+        // каноничному содержимому (`read_segment_plain`).
+        let stored_name = match encryption_key {
+            Some(key) if !is_encrypted_segment(path) => {
+                match crypto::finalize_segment(path, Some(key), true) {
+                    Ok(fin) => fin
+                        .stored_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&name)
+                        .to_string(),
+                    Err(e) => {
+                        eprintln!(
+                            "[recovery] ВНИМАНИЕ: дофинализация {path:?} не удалась ({e}) — сегмент оставлен открытым WAV"
+                        );
+                        name.clone()
+                    }
+                }
+            }
+            _ => name.clone(),
+        };
+        j.append(&JournalRecord::SegmentCompleted {
+            index,
+            path: stored_name,
+            frames,
+            started_at_unix_ms,
+        })?;
+    }
+    Ok(())
+}
+
+/// Каноничное имя сегмента без суффикса шифрования: `X.wav.enc` и `X.wav`
+/// обозначают один и тот же сегмент.
+fn canonical_segment_name(name: &str) -> String {
+    name.strip_suffix(&format!(".{}", crypto::ENCRYPTED_EXT))
+        .unwrap_or(name)
+        .to_string()
+}
+
+/// Разобрать имя файла сегмента `seg-NNNN-<unix_ms>.wav[.enc]` → (индекс, таймкод).
+fn parse_segment_name(name: &str) -> Option<(u32, u64)> {
+    let stem = canonical_segment_name(name);
+    let rest = stem.strip_prefix("seg-")?.strip_suffix(".wav")?;
+    let (index, unix_ms) = rest.split_once('-')?;
+    Some((index.parse().ok()?, unix_ms.parse().ok()?))
+}
+
+/// Число кадров сегмента по WAV-заголовку (для `.enc` — после дешифрования).
+fn segment_frames(path: &Path, key: Option<&[u8; crypto::KEY_LEN]>) -> Option<u64> {
+    if is_encrypted_segment(path) {
+        let plain = crypto::read_segment_plain(path, key).ok()?;
+        let reader = hound::WavReader::new(std::io::Cursor::new(plain)).ok()?;
+        Some(reader.duration() as u64)
+    } else {
+        let reader = hound::WavReader::open(path).ok()?;
+        Some(reader.duration() as u64)
+    }
 }
 
 // ── Починка WAV-заголовка ──────────────────────────────────────────────────────

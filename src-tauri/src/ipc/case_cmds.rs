@@ -129,7 +129,8 @@ pub fn bind_session_case(
     let store = ManifestStore::open(&root.join(MANIFEST_FILE)).map_err(|e| e.to_string())?;
 
     let dir_path = std::path::PathBuf::from(&dir);
-    let session_id = reconcile::reconcile_session(&store, &dir_path)
+    let key = crate::ipc::station_key_for_read(&settings, &root);
+    let session_id = reconcile::reconcile_session(&store, &dir_path, key.as_ref())
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("каталог не содержит начатой сессии: {dir}"))?;
 
