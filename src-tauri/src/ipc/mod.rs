@@ -105,6 +105,50 @@ pub(crate) fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(),
     fs::write(&path, json).map_err(|e| format!("не удалось записать {}: {e}", path.display()))
 }
 
+/// Env-переключатель провижининга автономного офлайн-режима (B-001).
+pub const AUTONOMOUS_OFFLINE_ENV: &str = "COURT_AUDIO_AUTONOMOUS_OFFLINE";
+
+/// Truthy-значения env-флага (регистронезависимо). Чистая функция — юнит-тест.
+pub fn env_flag_enabled(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Провизионировать автономный офлайн-режим из env при **отсутствующем**
+/// `settings.json` (замечание станции, 2026-07).
+///
+/// **Зачем.** В изолированном зале включить флаг
+/// `auth.operator.autonomous_offline.enabled` через UI **невозможно**: экран
+/// «Администрирование» — за гейтом входа оператора (`RequireOperator`), а войти
+/// без флага (и без онлайн-связи) нельзя — «курица и яйцо». Прочий провижининг
+/// станции уже идёт из env (ключ станции, админ-PIN, профиль оператора), поэтому
+/// и флаг режима закрываем тем же путём: при заданном
+/// `COURT_AUDIO_AUTONOMOUS_OFFLINE=1` и **отсутствующем** файле настроек ядро
+/// один раз пишет дефолтные настройки реестра с включённым флагом. Дальше
+/// стандартный провижининг операторского профиля (см. [`crate::run`]) засеет PIN.
+///
+/// **Идемпотентно и безопасно:** существующий `settings.json` **не трогается**
+/// (админские правки/импорт профиля не перезаписываются), поэтому режим нельзя
+/// «случайно» включить env на уже настроенной станции — только на чистой.
+/// Возвращает `true`, если файл был записан.
+pub fn seed_autonomous_offline_from_env_if_absent(app: &AppHandle) -> Result<bool, String> {
+    match std::env::var(AUTONOMOUS_OFFLINE_ENV) {
+        Ok(raw) if env_flag_enabled(&raw) => {}
+        _ => return Ok(false),
+    }
+    let path = settings_path(app)?;
+    if path.exists() {
+        // Файл уже есть — уважаем настройку станции, не перезаписываем.
+        return Ok(false);
+    }
+    let mut settings = Settings::default();
+    settings.auth.operator.autonomous_offline.enabled = true;
+    write_settings(app, &settings)?;
+    Ok(true)
+}
+
 /// Сохранить настройки (этап 10.4): гейт разграничения оператор/админ на уровне
 /// ядра, подтверждение опасных изменений и журнал — в [`admin_cmds`]. UI-запрет
 /// недостаточен: оператор не может изменить админ-параметр даже в обход UI.
@@ -154,5 +198,23 @@ pub(crate) fn resolve_storage_root(
             .app_data_dir()
             .map_err(|e| format!("не удалось определить каталог данных: {e}"))?
             .join("recordings")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Провижининг автономного режима из env (замечание станции 2026-07): чистая
+    // логика распознавания truthy-флага. Сама запись settings.json требует
+    // AppHandle и проверяется на станции по чек-листу docs/first_run_offline.md.
+    #[test]
+    fn autonomous_offline_env_flag_truthy_values() {
+        for v in ["1", "true", "TRUE", "Yes", " on ", "On"] {
+            assert!(env_flag_enabled(v), "ожидали truthy для {v:?}");
+        }
+        for v in ["", "0", "false", "no", "off", "enabled?", "2"] {
+            assert!(!env_flag_enabled(v), "ожидали falsy для {v:?}");
+        }
     }
 }

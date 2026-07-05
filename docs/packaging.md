@@ -256,8 +256,17 @@ Application** и учётку нотаризации — `APPLE_CERTIFICATE`,
 `admin_pin.enc`); дальше env можно снять, проверка PIN идёт оффлайн. Профиль
 провижинится **только** при поднятом флаге; иначе env игнорируются.
 
+Сам флаг в изолированном зале через UI не включить (экран «Администрирование» —
+за гейтом входа оператора). Поэтому его тоже провизионируют вне UI — переменной
+`COURT_AUDIO_AUTONOMOUS_OFFLINE=1` (пишет `settings.json` с включённым флагом при
+**отсутствующем** файле, на первом старте — до засева профиля) либо готовым
+`settings.json` (образец —
+[`samples/settings.autonomous_offline.json`](samples/settings.autonomous_offline.json)).
+Пошаговый порядок — [`first_run_offline.md`](first_run_offline.md).
+
 | Env | Назначение | Обязательность |
 |---|---|---|
+| `COURT_AUDIO_AUTONOMOUS_OFFLINE` | `1`/`true` → включает флаг `autonomous_offline.enabled` в `settings.json` на первом старте (только при отсутствующем файле, не секрет) | Первый старт изолированного зала (иначе флаг задаётся файлом `settings.json`) |
 | `COURT_AUDIO_OPERATOR_PIN` | PIN оператора зала → Argon2id-хеш в `operator_profile.enc` | Обязателен при `autonomous_offline.enabled` (иначе автономный старт недоступен) |
 | `COURT_AUDIO_OPERATOR_ID` | `operator_id` провижиненного оператора зала (обязателен в контракте `07`). **Числовой PK реального пользователя `ex_system`** — сервер резолвит оператора в учётку и при неизвестном id отвечает `400`, выгрузка зала встанет (решение «а», [`auth.md`](auth.md)) | Обязателен при `autonomous_offline.enabled` |
 | `COURT_AUDIO_OPERATOR_NAME` | ФИО оператора зала (для шапки/идентичности) | Опционально |

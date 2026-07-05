@@ -1,0 +1,150 @@
+{
+  "audio": {
+    "device": null,
+    "sample_rate_hz": 44100,
+    "bit_depth": 16,
+    "channels": 1,
+    "master_codec": "wav_pcm",
+    "capture_buffer_seconds": 2.0,
+    "level_update_hz": 25,
+    "archive_copy": {
+      "enabled": false,
+      "codec": "flac"
+    },
+    "multichannel": {
+      "enabled": false
+    },
+    "tracks": [],
+    "roles": [
+      "judge",
+      "clerk",
+      "prosecution",
+      "defense",
+      "witness",
+      "room"
+    ],
+    "sync": {
+      "clock_master_track": 0,
+      "drift_threshold_ms": 50,
+      "drift_compensate": true
+    },
+    "master_downmix": {
+      "enabled": false
+    }
+  },
+  "recorder": {
+    "segment_seconds": 30,
+    "flush_interval_ms": 1500,
+    "max_session_hours": 12
+  },
+  "reliability": {
+    "watchdog_timeout_ms": 5000,
+    "disk_low_threshold_mb": 1024,
+    "disk_critical_mb": 256,
+    "device_reconnect": {
+      "auto_resume": true
+    },
+    "mirror": {
+      "enabled": false,
+      "path": null
+    }
+  },
+  "storage": {
+    "root_path": null,
+    "encrypt_at_rest": true,
+    "key_source": "os_keystore"
+  },
+  "retention": {
+    "mode": "until_confirmed_plus_window",
+    "require_integrity_verified": true,
+    "safety_window_hours": 72
+  },
+  "integrity": {
+    "segment_hash": "sha256",
+    "hash_chain": true,
+    "event_log": true,
+    "gost_sign": false
+  },
+  "sync": {
+    "server_base_url": null,
+    "chunk_size_mb": 8,
+    "parallel_uploads": 1,
+    "auto_upload": true,
+    "defer_during_recording": false,
+    "offline_queue": {
+      "enabled": true
+    },
+    "retry": {
+      "backoff_base_ms": 2000,
+      "backoff_max_ms": 60000,
+      "max_attempts": 0
+    }
+  },
+  "auth": {
+    "station_identity": {
+      "required": true
+    },
+    "operator": {
+      "required_to_start": true,
+      "cached_session_hours": 24,
+      "offline_pin": {
+        "required": true,
+        "min_length": 4
+      },
+      "autonomous_offline": {
+        "enabled": true
+      }
+    },
+    "recording_survives_token_expiry": true
+  },
+  "case_cache": {
+    "enabled": true,
+    "encrypt": true,
+    "scope": "court_docket",
+    "ttl_hours": 24,
+    "max_records": 500
+  },
+  "markers": {
+    "categories": [
+      "Закладка",
+      "Инцидент",
+      "Перерыв",
+      "Прочее"
+    ]
+  },
+  "player": {
+    "seek_step_seconds": 15.0,
+    "playback_rates": [
+      0.5,
+      0.75,
+      1.0,
+      1.25,
+      1.5,
+      2.0
+    ],
+    "position_update_hz": 5
+  },
+  "export": {
+    "policy": "allowed",
+    "default_codec": "wav_pcm"
+  },
+  "admin": {
+    "pin": {
+      "required": true,
+      "min_length": 4
+    }
+  },
+  "ui": {
+    "hall_mode": {
+      "enabled": true
+    },
+    "compact_overlay": {
+      "enabled": false
+    }
+  },
+  "ux": {
+    "sound_alerts": {
+      "enabled": false
+    }
+  }
+}
