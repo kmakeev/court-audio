@@ -259,7 +259,7 @@ Application** и учётку нотаризации — `APPLE_CERTIFICATE`,
 | Env | Назначение | Обязательность |
 |---|---|---|
 | `COURT_AUDIO_OPERATOR_PIN` | PIN оператора зала → Argon2id-хеш в `operator_profile.enc` | Обязателен при `autonomous_offline.enabled` (иначе автономный старт недоступен) |
-| `COURT_AUDIO_OPERATOR_ID` | `operator_id` провижиненного оператора зала (обязателен в контракте `07`) | Обязателен при `autonomous_offline.enabled` |
+| `COURT_AUDIO_OPERATOR_ID` | `operator_id` провижиненного оператора зала (обязателен в контракте `07`). **Числовой PK реального пользователя `ex_system`** — сервер резолвит оператора в учётку и при неизвестном id отвечает `400`, выгрузка зала встанет (решение «а», [`auth.md`](auth.md)) | Обязателен при `autonomous_offline.enabled` |
 | `COURT_AUDIO_OPERATOR_NAME` | ФИО оператора зала (для шапки/идентичности) | Опционально |
 | `COURT_AUDIO_OPERATOR_ROLE` | Роль оператора зала | Опционально |
 
