@@ -1,7 +1,7 @@
 {
   "name": "court-audio",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "«Аудиопротокол» — модуль аудиопротоколирования судебных заседаний (Tauri + React/PravoUI).",
   "scripts": {
