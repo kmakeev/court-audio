@@ -109,7 +109,9 @@ court-audio/
   `13_2_multichannel_monitor.md` (R-008) · `13_3_mirror_structure.md` (R-010) ·
   `13_4_export_player_stall.md` (R-011) · `13_5_gates_failsecure.md`
   (R-003/R-004, безопасность) · `13_6_offline_pin_and_overlay.md`
-  (B-001 автономный офлайн-старт — после согласования; R-006 Windows overlay).
+  (B-001 автономный офлайн-старт — после согласования; R-006 Windows overlay) ·
+  `13_7_flac_memory_and_segment_encryption.md` (R-013 подключение шифрования
+  сегментов в live-путь, безопасность; R-014 потоковый FLAC-экспорт, память).
 
 ## Принципы «бесперебойности» (нефункциональное ядро)
 
